@@ -1,0 +1,3020 @@
+// Read backend port passed as URL search param
+const urlParams = new URLSearchParams(window.location.search);
+let backendPort = urlParams.get('port') || '9000';
+
+let BASE_URL = `http://127.0.0.1:${backendPort}`;
+
+// Sidebar Frame DOM Elements
+const displayPorts = document.querySelectorAll('.display-port');
+const electronStatuses = document.querySelectorAll('.electron-status');
+const backendStatuses = document.querySelectorAll('.backend-status');
+const mqttStatuses = document.querySelectorAll('.mqtt-status');
+
+// Navigation Tabs
+const navDashboard = document.getElementById('nav-dashboard');
+const navMqtt = document.getElementById('nav-mqtt');
+const navSystemConfig = document.getElementById('nav-system-config');
+
+const viewDashboard = document.getElementById('view-dashboard');
+const viewMqtt = document.getElementById('view-mqtt');
+const viewSystemConfigPane = document.getElementById('view-system-config-pane');
+
+// Initialize Sidebar UI
+displayPorts.forEach(el => el.innerText = backendPort);
+electronStatuses.forEach(el => el.className = 'job-status-badge conn-badge-connected electron-status'); // Electron is running
+
+// Navigation Handling
+function switchView(activeTab, targetPane) {
+  [navDashboard, navMqtt, navSystemConfig].forEach(tab => tab && tab.classList.remove('active'));
+  [viewDashboard, viewMqtt, viewSystemConfigPane].forEach(pane => pane && pane.classList.remove('active'));
+
+  activeTab.classList.add('active');
+  targetPane.classList.add('active');
+}
+
+if (navDashboard) navDashboard.addEventListener('click', () => switchView(navDashboard, viewDashboard));
+if (navMqtt) navMqtt.addEventListener('click', () => switchView(navMqtt, viewMqtt));
+if (navSystemConfig) navSystemConfig.addEventListener('click', () => switchView(navSystemConfig, viewSystemConfigPane));
+
+// Check backend connectivity regularly
+async function checkBackendHealth() {
+  try {
+    const response = await fetch(`${BASE_URL}/`);
+    if (response.ok) {
+      backendStatuses.forEach(el => el.className = 'job-status-badge conn-badge-connected backend-status');
+    } else {
+      backendStatuses.forEach(el => el.className = 'job-status-badge conn-badge-disconnected backend-status');
+    }
+  } catch (error) {
+    backendStatuses.forEach(el => el.className = 'job-status-badge conn-badge-disconnected backend-status');
+  }
+}
+
+// Update all MQTT pill badges across both status cards
+function setMqttBadgeStatus(connected) {
+  const cls = connected ? 'conn-badge-connected' : 'conn-badge-disconnected';
+  mqttStatuses.forEach(el => {
+    el.className = `job-status-badge ${cls} mqtt-status`;
+  });
+}
+
+// Template API Helper to call your Python FastAPI backend
+async function callBackend(endpoint, options = {}) {
+  try {
+    const response = await fetch(`${BASE_URL}${endpoint}`, options);
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error(`API Call to ${endpoint} failed:`, error);
+    throw error;
+  }
+}
+
+let lastPorts = null;
+let lastDetails = null;
+let serialSocket = null;
+let preferredPort = '';
+
+const activeSessions = new Map();
+let activeTabUid = null;
+
+function getDeviceUid(info) {
+  const vid = info.vid || 'unknown';
+  const pid = info.pid || 'unknown';
+  const ser = (info.ser && info.ser !== '------') ? info.ser : 'noserial';
+  const mfr = info.manufacturer || 'unknown';
+  return `dev_${vid}_${pid}_${ser}_${mfr}`.replace(/[^a-zA-Z0-9_]/g, '_');
+}
+
+function switchSerialTab(deviceUid) {
+  const session = activeSessions.get(deviceUid);
+  if (!session) return;
+  
+  activeTabUid = deviceUid;
+  
+  document.querySelectorAll('.com-tab-btn').forEach(btn => {
+    if (btn.getAttribute('data-uid') === deviceUid) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  
+  document.querySelectorAll('.com-workspace-wrapper').forEach(wrapper => {
+    if (wrapper.getAttribute('data-uid') === deviceUid) {
+      wrapper.classList.add('active');
+    } else {
+      wrapper.classList.remove('active');
+    }
+  });
+}
+
+function updateComPortDropdown(ports, details = {}) {
+  const tabContainer = document.getElementById('com-tool-tab-bar');
+  const placeholder = document.getElementById('com-empty-placeholder');
+  if (!tabContainer) return;
+  
+  // Track which deviceUids are currently plugged in
+  const onlineUids = new Set();
+  
+  ports.forEach(port => {
+    const info = details[port];
+    if (!info) return;
+    const deviceUid = getDeviceUid(info);
+    onlineUids.add(deviceUid);
+    
+    if (!activeSessions.has(deviceUid)) {
+      // Create new session
+      const session = new SerialPortSession(deviceUid, info);
+      activeSessions.set(deviceUid, session);
+      
+      // Add tab button to DOM
+      const tabBtn = document.createElement('button');
+      tabBtn.className = 'sub-tab-btn com-tab-btn online';
+      tabBtn.setAttribute('data-uid', deviceUid);
+      tabBtn.innerHTML = `
+        <span class="com-tab-dot"></span>
+        <span class="com-tab-name">${port}</span>
+        <span class="com-tab-close">×</span>
+      `;
+      
+      // Tab click switches view
+      tabBtn.addEventListener('click', (e) => {
+        if (e.target.classList.contains('com-tab-close')) {
+          return;
+        }
+        switchSerialTab(deviceUid);
+      });
+      
+      // Close button handler
+      tabBtn.querySelector('.com-tab-close').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sess = activeSessions.get(deviceUid);
+        if (sess) {
+          const confirmClose = sess.isOnline ? confirm(`Close connection and remove tab for ${port}?`) : true;
+          if (confirmClose) {
+            sess.destroy();
+            activeSessions.delete(deviceUid);
+            tabBtn.remove();
+            
+            if (activeTabUid === deviceUid) {
+              const remainingUids = Array.from(activeSessions.keys());
+              if (remainingUids.length > 0) {
+                switchSerialTab(remainingUids[0]);
+              } else {
+                activeTabUid = null;
+                tabContainer.style.display = 'none';
+              }
+            }
+            
+            // Toggle placeholder display
+            if (activeSessions.size > 0) {
+              if (placeholder) placeholder.style.display = 'none';
+            } else {
+              if (placeholder) placeholder.style.display = 'flex';
+            }
+          }
+        }
+      });
+      
+      tabContainer.appendChild(tabBtn);
+    } else {
+      // Session already exists. Check if it was offline, or if COM port number changed
+      const session = activeSessions.get(deviceUid);
+      if (!session.isOnline) {
+        session.setOnline(info);
+      } else if (session.portName !== port) {
+        session.setOnline(info);
+      }
+    }
+  });
+  
+  // Mark missing ports as offline
+  for (const [deviceUid, session] of activeSessions.entries()) {
+    if (!onlineUids.has(deviceUid) && session.isOnline) {
+      session.setOffline();
+    }
+  }
+  
+  // Show/hide tab bar and toggle placeholder based on whether we have any sessions
+  if (activeSessions.size > 0) {
+    tabContainer.style.display = 'flex';
+    if (placeholder) placeholder.style.display = 'none';
+    
+    // If no tab is currently selected, select the first online one or first available
+    if (!activeTabUid || !activeSessions.has(activeTabUid)) {
+      const remainingUids = Array.from(activeSessions.keys());
+      const firstOnline = remainingUids.find(uid => activeSessions.get(uid).isOnline);
+      switchSerialTab(firstOnline || remainingUids[0]);
+    }
+  } else {
+    tabContainer.style.display = 'none';
+    if (placeholder) placeholder.style.display = 'flex';
+    activeTabUid = null;
+  }
+}
+
+async function updateComPorts() {
+  const containers = document.querySelectorAll('.com-port-left');
+  const cards = document.querySelectorAll('.com-port-card');
+
+  try {
+    const response = await fetch(`${BASE_URL}/api/com_ports`);
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+    const data = await response.json();
+    if (data.status === 'success' && Array.isArray(data.ports)) {
+      const ports = data.ports;
+      const details = data.details || {};
+      
+      // Only update DOM if the ports list or details changed to prevent flickering
+      if (JSON.stringify(lastPorts) !== JSON.stringify(ports) || JSON.stringify(lastDetails) !== JSON.stringify(details)) {
+        lastPorts = ports;
+        lastDetails = details;
+        updateComPortDropdown(ports, details);
+        
+        if (ports.length === 0) {
+          cards.forEach(card => card.className = 'com-port-card glass');
+          containers.forEach(container => container.innerHTML = '');
+        } else {
+          cards.forEach(card => card.className = 'com-port-card glass');
+          let html = '';
+          ports.forEach((port, idx) => {
+            const marginLeft = idx === 0 ? '0' : '8px';
+            const info = details[port] || {
+              port: port,
+              name: `Serial Port (${port})`,
+              manufacturer: "------",
+              vid: "------",
+              pid: "------",
+              ser: "------",
+              occupied: false
+            };
+            const badgeClass = info.occupied ? 'conn-badge-occupied' : 'conn-badge-connected';
+            const tooltipHeaderStyle = info.occupied ? 'color: var(--danger);' : '';
+            const occupiedText = info.occupied ? ' (Occupied)' : '';
+            
+            html += `
+              <span class="job-status-badge ${badgeClass} port-pill" style="margin-left: ${marginLeft};">
+                ${port}
+                <div class="port-tooltip">
+                  <div class="tooltip-header" style="${tooltipHeaderStyle}">${info.port} - ${info.name}${occupiedText}</div>
+                  <div class="tooltip-divider"></div>
+                  <div class="tooltip-line"><span class="tooltip-lbl">MFR:</span><span class="tooltip-val">${info.manufacturer}</span></div>
+                  <div class="tooltip-line"><span class="tooltip-lbl">VID:</span><span class="tooltip-val">${info.vid}</span></div>
+                  <div class="tooltip-line"><span class="tooltip-lbl">PID:</span><span class="tooltip-val">${info.pid}</span></div>
+                  <div class="tooltip-line"><span class="tooltip-lbl">SER:</span><span class="tooltip-val">${info.ser}</span></div>
+                </div>
+              </span>
+            `;
+          });
+          containers.forEach(container => container.innerHTML = html);
+        }
+      }
+    } else {
+      if (JSON.stringify(lastPorts) !== JSON.stringify([])) {
+        lastPorts = [];
+        lastDetails = null;
+        cards.forEach(card => card.className = 'com-port-card glass');
+        containers.forEach(container => {
+          container.innerHTML = `
+            <span class="job-status-badge conn-badge-disconnected">OFFLINE</span>
+            <span style="color: var(--danger); font-size: 13px; font-weight: 500; margin-left: 4px;">API Error (${data.message || 'Unknown'})</span>
+          `;
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch COM ports:', error);
+    if (JSON.stringify(lastPorts) !== JSON.stringify([])) {
+      lastPorts = [];
+      lastDetails = null;
+      cards.forEach(card => card.className = 'com-port-card glass');
+      containers.forEach(container => {
+        container.innerHTML = `
+          <span class="job-status-badge conn-badge-disconnected">OFFLINE</span>
+          <span style="color: var(--danger); font-size: 13px; font-weight: 500; margin-left: 4px;">Connection Error</span>
+        `;
+      });
+    }
+  }
+}
+
+// Retrieve port dynamically via IPC to bypass URL query parsing issues on file:// protocol
+if (window.electronAPI && window.electronAPI.getBackendPort) {
+  window.electronAPI.getBackendPort().then(port => {
+    if (port) {
+      backendPort = port.toString();
+      BASE_URL = `http://127.0.0.1:${backendPort}`;
+      displayPorts.forEach(el => el.innerText = backendPort);
+      // Re-trigger checks immediately with the correct port
+      checkBackendHealth();
+      updateComPorts();
+    }
+  });
+}
+
+// Start polling backend connectivity status and COM ports every 3 seconds
+checkBackendHealth();
+updateComPorts();
+
+setInterval(checkBackendHealth, 3000);
+setInterval(updateComPorts, 3000);
+
+// Toggle hide CLI switch logic
+const toggleHideCli = document.getElementById('toggle-hide-cli');
+if (toggleHideCli && window.electronAPI && window.electronAPI.getHideCliFlag) {
+  // Load initial flag state
+  window.electronAPI.getHideCliFlag().then(hide => {
+    toggleHideCli.checked = hide;
+  });
+
+  // Handle changes
+  toggleHideCli.addEventListener('change', (e) => {
+    if (window.electronAPI.setHideCliFlag) {
+      window.electronAPI.setHideCliFlag(e.target.checked);
+    }
+  });
+}
+
+// Toggle close to system tray logic
+const toggleCloseToTray = document.getElementById('toggle-close-to-tray');
+if (toggleCloseToTray && window.electronAPI && window.electronAPI.getCloseToTrayFlag) {
+  // Load initial flag state
+  window.electronAPI.getCloseToTrayFlag().then(enable => {
+    toggleCloseToTray.checked = enable;
+  });
+
+  // Handle changes
+  toggleCloseToTray.addEventListener('change', (e) => {
+    if (window.electronAPI.setCloseToTrayFlag) {
+      window.electronAPI.setCloseToTrayFlag(e.target.checked);
+    }
+  });
+}
+
+
+// Helper to format raw hex input with spaces between every byte pair
+function formatHexWithSpaces(hexStr) {
+  const clean = hexStr.replace(/\s+/g, '');
+  const pairs = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    pairs.push(clean.substring(i, i + 2).toUpperCase());
+  }
+  return pairs.join(' ');
+}
+
+// Helper to get formatted local time as [HH:MM:SS.mmm]
+function getFormattedTime() {
+  const now = new Date();
+  const hrs = String(now.getHours()).padStart(2, '0');
+  const mins = String(now.getMinutes()).padStart(2, '0');
+  const secs = String(now.getSeconds()).padStart(2, '0');
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+  return `[${hrs}:${mins}:${secs}.${ms}]`;
+}
+
+// Calculate Modbus RTU CRC-16 (Polynomial: 0xA001, Initial: 0xFFFF)
+function crc16Modbus(buffer) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < buffer.length; i++) {
+    crc ^= buffer[i];
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x0001) !== 0) {
+        crc = (crc >>> 1) ^ 0xA001;
+      } else {
+        crc = crc >>> 1;
+      }
+    }
+  }
+  return crc;
+}
+
+// Verify if the Modbus RTU packet has a valid CRC-16 checksum
+function verifyModbusCRC(bytes) {
+  if (bytes.length < 3) return false;
+  const calculated = crc16Modbus(bytes.slice(0, -2));
+  const receivedLow = bytes[bytes.length - 2];
+  const receivedHigh = bytes[bytes.length - 1];
+  const received = receivedLow | (receivedHigh << 8);
+  return calculated === received;
+}
+
+// Convert string to hex space-separated representation
+function stringToHex(str) {
+  const arr = [];
+  for (let i = 0; i < str.length; i++) {
+    let hex = str.charCodeAt(i).toString(16).toUpperCase();
+    if (hex.length < 2) hex = '0' + hex;
+    arr.push(hex);
+  }
+  return arr.join(' ');
+}
+
+class SerialPortSession {
+  constructor(deviceUid, info) {
+    this.deviceUid = deviceUid;
+    this.info = info;
+    this.portName = info.port;
+    this.isOnline = true;
+    this.serialSocket = null;
+    this.consoleHistory = [];
+    this.lastLineType = '';
+    this.lastLineElement = null;
+    
+    // Create elements by cloning template
+    const template = document.getElementById('com-workspace-template');
+    const clone = template.content.cloneNode(true);
+    
+    this.workspaceWrapper = clone.querySelector('.com-workspace-wrapper');
+    this.workspaceWrapper.setAttribute('data-uid', deviceUid);
+    
+    // Find references to components in cloned wrapper
+    this.comPortSelect = this.workspaceWrapper.querySelector('.com-port-select');
+    this.baudRateSelect = this.workspaceWrapper.querySelector('.baud-rate-select');
+    this.dataBitsSelect = this.workspaceWrapper.querySelector('.data-bits-select');
+    this.stopBitsSelect = this.workspaceWrapper.querySelector('.stop-bits-select');
+    this.paritySelect = this.workspaceWrapper.querySelector('.parity-select');
+    this.btnSerialConnect = this.workspaceWrapper.querySelector('.btn-serial-connect');
+    this.serialSendInput = this.workspaceWrapper.querySelector('.serial-send-input');
+    this.lineEndingSelect = this.workspaceWrapper.querySelector('.line-ending-select');
+    this.chkSendHex = this.workspaceWrapper.querySelector('.chk-send-hex');
+    this.btnSerialSend = this.workspaceWrapper.querySelector('.btn-serial-send');
+    
+    this.chkTimeTag = this.workspaceWrapper.querySelector('.chk-time-tag');
+    this.chkModbusCrc = this.workspaceWrapper.querySelector('.chk-modbus-crc');
+    this.chkRecvHex = this.workspaceWrapper.querySelector('.chk-recv-hex');
+    this.chkAutoscroll = this.workspaceWrapper.querySelector('.chk-autoscroll');
+    this.btnClearConsole = this.workspaceWrapper.querySelector('.btn-clear-console');
+    this.serialConsoleBody = this.workspaceWrapper.querySelector('.serial-console-body');
+    
+    // Add workspace to dynamic container
+    document.getElementById('com-tool-workspaces-container').appendChild(this.workspaceWrapper);
+    
+    // Default initial options
+    this.comPortSelect.innerHTML = `<option value="${this.portName}">${this.portName}</option>`;
+    this.comPortSelect.value = this.portName;
+    this.comPortSelect.disabled = true;
+    
+    this.loadSettings();
+    this.loadHistory();
+    this.setupListeners();
+  }
+
+  saveSettings() {
+    const settings = {
+      baud: this.baudRateSelect.value,
+      databits: this.dataBitsSelect.value,
+      stopbits: this.stopBitsSelect.value,
+      parity: this.paritySelect.value,
+      lineending: this.lineEndingSelect.value,
+      hexsend: this.chkSendHex.checked,
+      hexrecv: this.chkRecvHex.checked,
+      autoscroll: this.chkAutoscroll.checked,
+      modbuscrc: this.chkModbusCrc.checked,
+      timetag: this.chkTimeTag.checked
+    };
+    localStorage.setItem(`serial_settings_${this.deviceUid}`, JSON.stringify(settings));
+  }
+
+  loadSettings() {
+    const raw = localStorage.getItem(`serial_settings_${this.deviceUid}`);
+    if (raw) {
+      try {
+        const settings = JSON.parse(raw);
+        if (settings.baud) this.baudRateSelect.value = settings.baud;
+        if (settings.databits) this.dataBitsSelect.value = settings.databits;
+        if (settings.stopbits) this.stopBitsSelect.value = settings.stopbits;
+        if (settings.parity) this.paritySelect.value = settings.parity;
+        if (settings.lineending) this.lineEndingSelect.value = settings.lineending;
+        if (settings.hexsend !== undefined) this.chkSendHex.checked = settings.hexsend;
+        if (settings.hexrecv !== undefined) this.chkRecvHex.checked = settings.hexrecv;
+        if (settings.autoscroll !== undefined) this.chkAutoscroll.checked = settings.autoscroll;
+        if (settings.modbuscrc !== undefined) this.chkModbusCrc.checked = settings.modbuscrc;
+        if (settings.timetag !== undefined) this.chkTimeTag.checked = settings.timetag;
+      } catch (e) {
+        console.error('Failed to load settings for device ' + this.deviceUid, e);
+      }
+    }
+    
+    let savedSendInput = localStorage.getItem(`serial_send_input_${this.deviceUid}`);
+    if (savedSendInput === null) {
+      savedSendInput = localStorage.getItem('serial_send_input');
+      if (savedSendInput !== null) {
+        localStorage.setItem(`serial_send_input_${this.deviceUid}`, savedSendInput);
+      }
+    }
+    if (savedSendInput !== null) {
+      this.serialSendInput.value = savedSendInput;
+    }
+  }
+
+  saveHistory() {
+    const maxHistoryItems = 1000;
+    let historyToSave = this.consoleHistory;
+    if (this.consoleHistory.length > maxHistoryItems) {
+      historyToSave = this.consoleHistory.slice(-maxHistoryItems);
+    }
+    try {
+      localStorage.setItem(`serial_console_history_${this.deviceUid}`, JSON.stringify(historyToSave));
+    } catch (e) {
+      console.error('Failed to save history for device ' + this.deviceUid, e);
+    }
+  }
+
+  loadHistory() {
+    const raw = localStorage.getItem(`serial_console_history_${this.deviceUid}`);
+    if (!raw) return;
+    try {
+      this.consoleHistory = JSON.parse(raw) || [];
+      this.rebuildConsole();
+    } catch (e) {
+      console.error('Failed to load console history:', e);
+    }
+  }
+
+  updateLineCRC(lineElement, isSend) {
+    const checkEnabled = this.chkModbusCrc.checked;
+    const existingBadge = lineElement.querySelector('.crc-badge');
+    if (existingBadge) {
+      existingBadge.remove();
+    }
+    if (lineElement.rawText) {
+      lineElement.textContent = lineElement.rawText;
+    }
+    if (!checkEnabled) return;
+    const isHexLine = isSend ? !lineElement.classList.contains('text-send') : this.chkRecvHex.checked;
+    if (!isHexLine) return;
+    const prefix = isSend ? '>> ' : '<< ';
+    let rawText = lineElement.rawText || lineElement.textContent;
+    const prefixIdx = rawText.indexOf(prefix);
+    if (prefixIdx === -1) return;
+    let contentText = rawText.substring(prefixIdx + prefix.length).trim();
+    const cleanHex = contentText.replace(/\s+/g, '');
+    if (/^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
+      const bytes = [];
+      for (let i = 0; i < cleanHex.length; i += 2) {
+        bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+      }
+      const crcOK = verifyModbusCRC(bytes);
+      const badge = document.createElement('span');
+      badge.className = `crc-badge ${crcOK ? 'crc-ok' : 'crc-err'}`;
+      badge.textContent = crcOK ? 'CRC: OK' : 'CRC: ERR';
+      lineElement.appendChild(badge);
+    }
+  }
+
+  rebuildConsole() {
+    if (!this.serialConsoleBody) return;
+    this.serialConsoleBody.innerHTML = '';
+    let lastType = '';
+    let lastEl = null;
+    const showHex = this.chkRecvHex.checked;
+    const showTime = this.chkTimeTag.checked;
+    
+    this.consoleHistory.forEach(item => {
+      const timePrefix = (showTime && item.timestamp) ? item.timestamp + ' ' : '';
+      if (item.type === 'send') {
+        const prefix = '>> ';
+        let displayText = item.data;
+        if (item.isHex) {
+          displayText = formatHexWithSpaces(item.data);
+        } else {
+          if (showHex) {
+            displayText = stringToHex(item.data);
+          } else {
+            displayText = item.data.replace('\r\n', '\\r\\n').replace('\n', '\\n').replace('\r', '\\r');
+          }
+        }
+        const line = document.createElement('div');
+        line.className = 'console-line send-msg';
+        if (!item.isHex) {
+          line.classList.add('text-send');
+        }
+        line.textContent = timePrefix + prefix + displayText;
+        line.rawText = timePrefix + prefix + displayText;
+        this.serialConsoleBody.appendChild(line);
+        lastEl = line;
+        lastType = 'send';
+        this.updateLineCRC(line, true);
+      } else if (item.type === 'recv') {
+        let displayText = item.data;
+        if (showHex) {
+          displayText = stringToHex(item.data) + ' ';
+        }
+        let shouldAppend = false;
+        if (lastEl && lastType === 'recv') {
+          const lastText = lastEl.rawText || lastEl.textContent;
+          if (showHex) {
+            shouldAppend = true;
+          } else {
+            if (!lastText.endsWith('\n') && !lastText.endsWith('\r')) {
+              shouldAppend = true;
+            }
+          }
+        }
+        if (shouldAppend) {
+          if (!lastEl.rawText) {
+            lastEl.rawText = lastEl.textContent;
+          }
+          lastEl.rawText += displayText;
+          lastEl.textContent = lastEl.rawText;
+          this.updateLineCRC(lastEl, false);
+        } else {
+          const prefix = '<< ';
+          const line = document.createElement('div');
+          line.className = 'console-line recv-msg';
+          line.textContent = timePrefix + prefix + displayText;
+          line.rawText = timePrefix + prefix + displayText;
+          this.serialConsoleBody.appendChild(line);
+          lastEl = line;
+          lastType = 'recv';
+          this.updateLineCRC(line, false);
+        }
+      } else {
+        const line = document.createElement('div');
+        line.className = `console-line ${item.type === 'error' ? 'error-msg' : 'system-msg'}`;
+        line.textContent = item.data;
+        line.rawText = item.data;
+        this.serialConsoleBody.appendChild(line);
+        lastEl = line;
+        lastType = item.type;
+      }
+    });
+    this.lastLineElement = lastEl;
+    this.lastLineType = lastType;
+    if (this.chkAutoscroll.checked) {
+      this.serialConsoleBody.scrollTop = this.serialConsoleBody.scrollHeight;
+    }
+  }
+
+  addSendToConsole(text, isHex) {
+    const formattedText = isHex ? formatHexWithSpaces(text) : text;
+    const timestamp = getFormattedTime();
+    this.consoleHistory.push({ type: 'send', data: formattedText, isHex: isHex, timestamp: timestamp });
+    this.saveHistory();
+    const showTime = this.chkTimeTag.checked;
+    const timePrefix = showTime ? timestamp + ' ' : '';
+    const prefix = '>> ';
+    let displayText = formattedText;
+    const showHex = this.chkRecvHex.checked;
+    if (isHex) {
+      displayText = formattedText;
+    } else {
+      if (showHex) {
+        displayText = stringToHex(formattedText);
+      } else {
+        displayText = formattedText.replace('\r\n', '\\r\\n').replace('\n', '\\n').replace('\r', '\\r');
+      }
+    }
+    const line = document.createElement('div');
+    line.className = 'console-line send-msg';
+    if (!isHex) {
+      line.classList.add('text-send');
+    }
+    line.textContent = timePrefix + prefix + displayText;
+    line.rawText = timePrefix + prefix + displayText;
+    this.serialConsoleBody.appendChild(line);
+    this.lastLineElement = line;
+    this.lastLineType = 'send';
+    this.updateLineCRC(line, true);
+    if (this.chkAutoscroll.checked) {
+      this.serialConsoleBody.scrollTop = this.serialConsoleBody.scrollHeight;
+    }
+  }
+
+  addRecvToConsole(text) {
+    const timestamp = getFormattedTime();
+    this.consoleHistory.push({ type: 'recv', data: text, timestamp: timestamp });
+    this.saveHistory();
+    const showHex = this.chkRecvHex.checked;
+    const showTime = this.chkTimeTag.checked;
+    const timePrefix = showTime ? timestamp + ' ' : '';
+    let displayText = text;
+    if (showHex) {
+      displayText = stringToHex(text) + ' ';
+    }
+    let shouldAppend = false;
+    if (this.lastLineElement && this.lastLineType === 'recv') {
+      const lastText = this.lastLineElement.rawText || this.lastLineElement.textContent;
+      if (showHex) {
+        shouldAppend = true;
+      } else {
+        if (!lastText.endsWith('\n') && !lastText.endsWith('\r')) {
+          shouldAppend = true;
+        }
+      }
+    }
+    if (shouldAppend) {
+      if (!this.lastLineElement.rawText) {
+        this.lastLineElement.rawText = this.lastLineElement.textContent;
+      }
+      this.lastLineElement.rawText += displayText;
+      this.lastLineElement.textContent = this.lastLineElement.rawText;
+      this.updateLineCRC(this.lastLineElement, false);
+    } else {
+      const line = document.createElement('div');
+      line.className = 'console-line recv-msg';
+      line.textContent = timePrefix + '<< ' + displayText;
+      line.rawText = timePrefix + '<< ' + displayText;
+      this.serialConsoleBody.appendChild(line);
+      this.lastLineElement = line;
+      this.lastLineType = 'recv';
+      this.updateLineCRC(line, false);
+    }
+    if (this.chkAutoscroll.checked) {
+      this.serialConsoleBody.scrollTop = this.serialConsoleBody.scrollHeight;
+    }
+  }
+
+  addSystemToConsole(text, isError = false) {
+    const type = isError ? 'error' : 'system';
+    this.consoleHistory.push({ type: type, data: text });
+    this.saveHistory();
+    const line = document.createElement('div');
+    line.className = `console-line ${isError ? 'error-msg' : 'system-msg'}`;
+    line.textContent = text;
+    line.rawText = text;
+    this.serialConsoleBody.appendChild(line);
+    this.lastLineElement = line;
+    this.lastLineType = type;
+    if (this.chkAutoscroll.checked) {
+      this.serialConsoleBody.scrollTop = this.serialConsoleBody.scrollHeight;
+    }
+  }
+
+  setupListeners() {
+    this.btnSerialConnect.addEventListener('click', () => {
+      this.toggleConnection();
+    });
+    this.btnSerialSend.addEventListener('click', () => {
+      this.sendData();
+    });
+    this.serialSendInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.ctrlKey) {
+        e.preventDefault();
+        this.sendData();
+      }
+    });
+    this.serialSendInput.addEventListener('input', () => {
+      localStorage.setItem(`serial_send_input_${this.deviceUid}`, this.serialSendInput.value);
+    });
+    this.btnClearConsole.addEventListener('click', () => {
+      this.serialConsoleBody.innerHTML = '';
+      this.consoleHistory = [];
+      this.lastLineElement = null;
+      this.lastLineType = '';
+      localStorage.removeItem(`serial_console_history_${this.deviceUid}`);
+    });
+    this.baudRateSelect.addEventListener('change', () => this.saveSettings());
+    this.dataBitsSelect.addEventListener('change', () => this.saveSettings());
+    this.stopBitsSelect.addEventListener('change', () => this.saveSettings());
+    this.paritySelect.addEventListener('change', () => this.saveSettings());
+    this.lineEndingSelect.addEventListener('change', () => this.saveSettings());
+    this.chkSendHex.addEventListener('change', () => this.saveSettings());
+    this.chkAutoscroll.addEventListener('change', () => this.saveSettings());
+    
+    this.chkRecvHex.addEventListener('change', () => {
+      this.saveSettings();
+      this.rebuildConsole();
+    });
+    this.chkTimeTag.addEventListener('change', () => {
+      this.saveSettings();
+      this.rebuildConsole();
+    });
+    this.chkModbusCrc.addEventListener('change', () => {
+      this.saveSettings();
+      const lines = this.serialConsoleBody.querySelectorAll('.console-line');
+      lines.forEach(line => {
+        const isSend = line.classList.contains('send-msg');
+        const isRecv = line.classList.contains('recv-msg');
+        if (isSend || isRecv) {
+          this.updateLineCRC(line, isSend);
+        }
+      });
+    });
+  }
+
+  toggleConnection() {
+    if (this.serialSocket && this.serialSocket.readyState === WebSocket.OPEN) {
+      this.serialSocket.send(JSON.stringify({action: 'close'}));
+      this.serialSocket.close();
+      return;
+    }
+    if (!this.isOnline) {
+      this.addSystemToConsole('[System] Cannot connect: Device is offline/unplugged.', true);
+      return;
+    }
+    const port = this.portName;
+    const baud = this.baudRateSelect.value;
+    const bytesize = this.dataBitsSelect.value;
+    const stopbits = this.stopBitsSelect.value;
+    const parity = this.paritySelect.value;
+    this.addSystemToConsole(`[System] Connecting to ${port} at ${baud} baud...`);
+    this.btnSerialConnect.disabled = true;
+    const wsUrl = `${BASE_URL.replace('http://', 'ws://')}/ws/serial?port=${port}&baud=${baud}&bytesize=${bytesize}&stopbits=${stopbits}&parity=${parity}`;
+    
+    try {
+      this.serialSocket = new WebSocket(wsUrl);
+      this.serialSocket.onopen = () => {
+        this.btnSerialConnect.disabled = false;
+        this.btnSerialConnect.textContent = 'Disconnect Port';
+        this.btnSerialConnect.className = 'btn btn-primary btn-serial-connect';
+        this.btnSerialConnect.style.background = 'linear-gradient(135deg, var(--danger), #b02a37)';
+        this.baudRateSelect.disabled = true;
+        this.dataBitsSelect.disabled = true;
+        this.stopBitsSelect.disabled = true;
+        this.paritySelect.disabled = true;
+        this.btnSerialSend.disabled = false;
+        this.addSystemToConsole(`[System] Connected to ${port} successfully.`);
+      };
+      this.serialSocket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'data') {
+            this.addRecvToConsole(msg.data);
+          } else if (msg.type === 'error') {
+            this.addSystemToConsole(`[Error] ${msg.message}`, true);
+          }
+        } catch (e) {
+          this.addSystemToConsole(`[Data Error] Failed to parse backend socket output: ${e.message}`, true);
+        }
+      };
+      this.serialSocket.onclose = () => {
+        this.btnSerialConnect.disabled = false;
+        this.btnSerialConnect.textContent = 'Connect Port';
+        this.btnSerialConnect.className = 'btn btn-primary btn-serial-connect';
+        this.btnSerialConnect.style.background = '';
+        if (this.isOnline) {
+          this.baudRateSelect.disabled = false;
+          this.dataBitsSelect.disabled = false;
+          this.stopBitsSelect.disabled = false;
+          this.paritySelect.disabled = false;
+        }
+        this.btnSerialSend.disabled = true;
+        this.addSystemToConsole(`[System] Disconnected.`);
+        this.serialSocket = null;
+      };
+      this.serialSocket.onerror = (err) => {
+        this.addSystemToConsole(`[System Error] WebSocket error occurred.`, true);
+      };
+    } catch (err) {
+      this.btnSerialConnect.disabled = false;
+      this.addSystemToConsole(`[System Error] Failed to open socket: ${err.message}`, true);
+    }
+  }
+
+  sendData() {
+    if (!this.serialSocket || this.serialSocket.readyState !== WebSocket.OPEN) {
+      this.addSystemToConsole('[System] Error: Port is not connected.', true);
+      return;
+    }
+    let text = this.serialSendInput.value;
+    if (!text) return;
+    const isHex = this.chkSendHex.checked;
+    if (isHex) {
+      const clean = text.replace(/\s+/g, '');
+      if (!/^[0-9A-Fa-f]+$/.test(clean)) {
+        this.addSystemToConsole('[System] Invalid HEX input! Please enter only hexadecimal characters (0-9, A-F).', true);
+        return;
+      }
+    }
+    let displayText = text;
+    if (!isHex) {
+      const ending = this.lineEndingSelect.value;
+      if (ending === 'lf') {
+        text += '\n';
+        displayText += '\\n';
+      } else if (ending === 'cr') {
+        text += '\r';
+        displayText += '\\r';
+      } else if (ending === 'crlf') {
+        text += '\r\n';
+        displayText += '\\r\\n';
+      }
+    }
+    this.serialSocket.send(JSON.stringify({
+      action: 'write',
+      data: text,
+      hex: isHex
+    }));
+    this.addSendToConsole(displayText, isHex);
+  }
+
+  setOffline() {
+    this.isOnline = false;
+    this.btnSerialConnect.disabled = true;
+    this.baudRateSelect.disabled = true;
+    this.dataBitsSelect.disabled = true;
+    this.stopBitsSelect.disabled = true;
+    this.paritySelect.disabled = true;
+    this.btnSerialSend.disabled = true;
+    if (this.serialSocket) {
+      if (this.serialSocket.readyState === WebSocket.OPEN) {
+        this.serialSocket.close();
+      }
+      this.serialSocket = null;
+    }
+    const tabEl = document.querySelector(`.com-tab-btn[data-uid="${this.deviceUid}"]`);
+    if (tabEl) {
+      tabEl.classList.remove('online');
+      tabEl.classList.add('offline');
+    }
+    this.addSystemToConsole(`[System] Hardware connection lost. Device ${this.portName} is offline.`);
+  }
+
+  setOnline(info) {
+    this.isOnline = true;
+    this.info = info;
+    this.portName = info.port;
+    this.comPortSelect.innerHTML = `<option value="${this.portName}">${this.portName}</option>`;
+    this.comPortSelect.value = this.portName;
+    this.btnSerialConnect.disabled = false;
+    if (!this.serialSocket) {
+      this.baudRateSelect.disabled = false;
+      this.dataBitsSelect.disabled = false;
+      this.stopBitsSelect.disabled = false;
+      this.paritySelect.disabled = false;
+    }
+    const tabEl = document.querySelector(`.com-tab-btn[data-uid="${this.deviceUid}"]`);
+    if (tabEl) {
+      tabEl.classList.remove('offline');
+      tabEl.classList.add('online');
+      const nameEl = tabEl.querySelector('.com-tab-name');
+      if (nameEl) {
+        nameEl.textContent = this.portName;
+      }
+    }
+    this.addSystemToConsole(`[System] Device ${this.portName} connected (hardware signatures matched).`);
+  }
+
+  destroy() {
+    if (this.serialSocket) {
+      try {
+        this.serialSocket.close();
+      } catch(e) {}
+    }
+    if (this.workspaceWrapper && this.workspaceWrapper.parentNode) {
+      this.workspaceWrapper.parentNode.removeChild(this.workspaceWrapper);
+    }
+  }
+}
+
+console.log('Renderer boilerplate initialized. Ready for custom components!');;
+
+// ==========================================
+// MQTT VIEW & SUB-TABS NAVIGATION
+// ==========================================
+const subTabBtnInternet = document.getElementById('sub-tab-btn-internet');
+const subTabBtnCellular = document.getElementById('sub-tab-btn-cellular');
+const subTabBtnPerf = document.getElementById('sub-tab-btn-perf');
+
+const paneInternet = document.getElementById('pane-internet');
+const paneCellular = document.getElementById('pane-cellular');
+const panePerf = document.getElementById('pane-perf');
+
+function switchMqttSubTab(activeBtn, targetPane) {
+  [subTabBtnInternet, subTabBtnCellular, subTabBtnPerf].forEach(btn => btn && btn.classList.remove('active'));
+  [paneInternet, paneCellular, panePerf].forEach(pane => pane && pane.classList.remove('active'));
+  
+  activeBtn.classList.add('active');
+  targetPane.classList.add('active');
+  
+  if (targetPane === panePerf) {
+    drawPerformanceChart();
+  }
+}
+
+if (subTabBtnInternet) subTabBtnInternet.addEventListener('click', () => switchMqttSubTab(subTabBtnInternet, paneInternet));
+if (subTabBtnCellular) subTabBtnCellular.addEventListener('click', () => switchMqttSubTab(subTabBtnCellular, paneCellular));
+if (subTabBtnPerf) subTabBtnPerf.addEventListener('click', () => switchMqttSubTab(subTabBtnPerf, panePerf));
+
+
+// ==========================================
+// INTERNET MQTT CONFIG & SOCKET
+// ==========================================
+let inetSocket = null;
+let inetSubs = {}; // topic -> qos
+let inetLogs = [];
+
+const inetBrokerHost = document.getElementById('inet-broker-host');
+const inetBrokerPort = document.getElementById('inet-broker-port');
+const inetBrokerCid = document.getElementById('inet-broker-cid');
+const inetBrokerUser = document.getElementById('inet-broker-user');
+const inetBrokerPwd = document.getElementById('inet-broker-pwd');
+const btnInetConnect = document.getElementById('btn-inet-connect');
+
+const inetSubTopic = document.getElementById('inet-sub-topic');
+const inetSubQos = document.getElementById('inet-sub-qos');
+const btnInetSub = document.getElementById('btn-inet-sub');
+const inetActiveSubsList = document.getElementById('inet-active-subs-list');
+
+const inetPubTopic = document.getElementById('inet-pub-topic');
+const inetPubQos = document.getElementById('inet-pub-qos');
+const inetPubPayload = document.getElementById('inet-pub-payload');
+const btnInetPub = document.getElementById('btn-inet-pub');
+
+const chkInetTimeTag = document.getElementById('chk-inet-timetag');
+const chkInetAutoscroll = document.getElementById('chk-inet-autoscroll');
+const chkInetHexMode = document.getElementById('chk-inet-hex-mode');
+const chkInetModbusCrc = document.getElementById('chk-inet-modbus-crc');
+const btnClearInetConsole = document.getElementById('btn-clear-inet-console');
+const inetConsoleBody = document.getElementById('inet-console-body');
+
+// Inet and Cell console log history for persistence and live HEX/CRC re-rendering
+let inetConsoleHistory = [];
+let cellConsoleHistory = [];
+
+function saveInetConsoleHistory() {
+  if (inetConsoleHistory.length > 500) {
+    inetConsoleHistory = inetConsoleHistory.slice(-500);
+  }
+  localStorage.setItem('inet_console_history', JSON.stringify(inetConsoleHistory));
+}
+
+function loadInetConsoleHistory() {
+  const raw = localStorage.getItem('inet_console_history');
+  if (!raw) return;
+  try {
+    inetConsoleHistory = JSON.parse(raw) || [];
+    rebuildInetConsole();
+  } catch (e) {
+    console.error('Failed to load inet console history:', e);
+  }
+}
+
+function saveCellConsoleHistory() {
+  if (cellConsoleHistory.length > 500) {
+    cellConsoleHistory = cellConsoleHistory.slice(-500);
+  }
+  localStorage.setItem('cell_console_history', JSON.stringify(cellConsoleHistory));
+}
+
+function loadCellConsoleHistory() {
+  const raw = localStorage.getItem('cell_console_history');
+  if (!raw) return;
+  try {
+    cellConsoleHistory = JSON.parse(raw) || [];
+    rebuildCellConsole();
+  } catch (e) {
+    console.error('Failed to load cell console history:', e);
+  }
+}
+
+// Load settings from LocalStorage
+function loadInetSettings() {
+  const settings = JSON.parse(localStorage.getItem('inet_mqtt_settings'));
+  if (settings) {
+    if (inetBrokerHost && settings.host) inetBrokerHost.value = settings.host;
+    if (inetBrokerPort && settings.port) inetBrokerPort.value = settings.port;
+    if (inetBrokerCid && settings.cid) inetBrokerCid.value = settings.cid;
+    if (inetBrokerUser && settings.user !== undefined) inetBrokerUser.value = settings.user;
+    if (inetBrokerPwd && settings.pwd !== undefined) inetBrokerPwd.value = settings.pwd;
+    if (inetSubTopic && settings.subTopic) inetSubTopic.value = settings.subTopic;
+    if (inetSubQos && settings.subQos) inetSubQos.value = settings.subQos;
+    if (inetPubTopic && settings.pubTopic) inetPubTopic.value = settings.pubTopic;
+    if (inetPubQos && settings.pubQos) inetPubQos.value = settings.pubQos;
+    if (inetPubPayload && settings.pubPayload) inetPubPayload.value = settings.pubPayload;
+    if (chkInetTimeTag && settings.timeTag !== undefined) chkInetTimeTag.checked = settings.timeTag;
+    if (chkInetAutoscroll && settings.autoscroll !== undefined) chkInetAutoscroll.checked = settings.autoscroll;
+    if (chkInetHexMode && settings.hexMode !== undefined) chkInetHexMode.checked = settings.hexMode;
+    if (chkInetModbusCrc && settings.modbusCrc !== undefined) chkInetModbusCrc.checked = settings.modbusCrc;
+    if (settings.subs !== undefined) {
+      inetSubs = settings.subs;
+    } else {
+      inetSubs = {"nanopd/dtu/tx": 1};
+    }
+  } else {
+    // Default subscriptions
+    inetSubs = {"nanopd/dtu/tx": 1};
+  }
+  rebuildActiveSubsList();
+}
+
+function saveInetSettings() {
+  const settings = {
+    host: inetBrokerHost ? inetBrokerHost.value : '',
+    port: inetBrokerPort ? inetBrokerPort.value : 1883,
+    cid: inetBrokerCid ? inetBrokerCid.value : '',
+    user: inetBrokerUser ? inetBrokerUser.value : '',
+    pwd: inetBrokerPwd ? inetBrokerPwd.value : '',
+    subTopic: inetSubTopic ? inetSubTopic.value : '',
+    subQos: inetSubQos ? inetSubQos.value : 0,
+    pubTopic: inetPubTopic ? inetPubTopic.value : '',
+    pubQos: inetPubQos ? inetPubQos.value : 0,
+    pubPayload: inetPubPayload ? inetPubPayload.value : '',
+    timeTag: chkInetTimeTag ? chkInetTimeTag.checked : true,
+    autoscroll: chkInetAutoscroll ? chkInetAutoscroll.checked : true,
+    hexMode: chkInetHexMode ? chkInetHexMode.checked : false,
+    modbusCrc: chkInetModbusCrc ? chkInetModbusCrc.checked : false,
+    subs: inetSubs
+  };
+  localStorage.setItem('inet_mqtt_settings', JSON.stringify(settings));
+}
+
+// Format a payload for display based on HEX mode
+function formatMqttPayload(rawPayload, hexMode) {
+  if (hexMode) {
+    return stringToHex(rawPayload);
+  }
+  // Auto: show hex if binary content detected
+  let hasBinary = false;
+  for (let i = 0; i < rawPayload.length; i++) {
+    const c = rawPayload.charCodeAt(i);
+    if ((c < 0x09) || (c > 0x0D && c < 0x20) || c > 0x7E) {
+      hasBinary = true;
+      break;
+    }
+  }
+  return hasBinary ? stringToHex(rawPayload) : rawPayload;
+}
+
+// Attach a CRC badge to a console line element if appropriate
+function attachMqttCrcBadge(lineEl, hexStr, crcEnabled) {
+  const existing = lineEl.querySelector('.crc-badge');
+  if (existing) existing.remove();
+  if (!crcEnabled) return;
+  const cleanHex = hexStr.replace(/\s+/g, '');
+  if (/^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
+    const bytes = [];
+    for (let i = 0; i < cleanHex.length; i += 2) {
+      bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+    }
+    if (bytes.length >= 3) {
+      const crcOK = verifyModbusCRC(bytes);
+      const badge = document.createElement('span');
+      badge.className = `crc-badge ${crcOK ? 'crc-ok' : 'crc-err'}`;
+      badge.textContent = crcOK ? 'CRC: OK' : 'CRC: ERR';
+      lineEl.appendChild(badge);
+    }
+  }
+}
+
+// ============================================================
+// MODBUS STREAM ANALYSIS ENGINE
+// ============================================================
+
+// FC name table
+const MODBUS_FC_NAMES = {
+  0x01: 'Read Coils',
+  0x02: 'Read Discrete Inputs',
+  0x03: 'Read Holding Registers',
+  0x04: 'Read Input Registers',
+  0x05: 'Write Single Coil',
+  0x06: 'Write Single Register',
+  0x0F: 'Write Multiple Coils',
+  0x10: 'Write Multiple Registers',
+};
+
+/**
+ * Returns the expected byte-length of a Modbus RTU frame starting at bytes[offset].
+ * Returns -1 if not enough data yet, 0 if not a recognised pattern.
+ *   type: 'request' | 'response' | 'error'
+ */
+function modbusFrameLength(bytes, offset, hint) {
+  if (offset + 2 > bytes.length) return { len: -1 }; // need more data
+  const fc = bytes[offset + 1];
+  const isErr = (fc & 0x80) !== 0;
+
+  if (isErr) {
+    // Error response: ID FC(|0x80) ExCode CRC_L CRC_H  => 5 bytes
+    return { len: 5, type: 'error', fc: fc & 0x7F };
+  }
+
+  // REQUEST frames (fixed 8 bytes for FC 01-04, 05, 06; variable for 0F, 10)
+  if (hint === 'request') {
+    if (fc >= 0x01 && fc <= 0x06) return { len: 8, type: 'request', fc };
+    if (fc === 0x0F || fc === 0x10) {
+      if (offset + 7 > bytes.length) return { len: -1 };
+      const byteCount = bytes[offset + 6];
+      return { len: 7 + byteCount + 2, type: 'request', fc };
+    }
+    return { len: 0 };
+  }
+
+  // RESPONSE frames
+  if (fc >= 0x01 && fc <= 0x04) {
+    // ID FC ByteCount Data... CRC_L CRC_H
+    if (offset + 3 > bytes.length) return { len: -1 };
+    const byteCount = bytes[offset + 2];
+    return { len: 3 + byteCount + 2, type: 'response', fc };
+  }
+  if (fc === 0x05 || fc === 0x06) {
+    return { len: 8, type: 'response', fc };   // echo of request
+  }
+  if (fc === 0x0F || fc === 0x10) {
+    return { len: 8, type: 'response', fc };   // ID FC AddrH AddrL QtyH QtyL CRC_L CRC_H
+  }
+  return { len: 0 };
+}
+
+/**
+ * Try to extract ONE Modbus frame starting at bytes[offset].
+ * Returns { frame, len } or null.
+ * hint: 'request' | 'response' | 'auto'
+ */
+function tryParseModbusAt(bytes, offset, hint = 'auto') {
+  const hints = hint === 'auto' ? ['response', 'request'] : [hint];
+  for (const h of hints) {
+    const { len, type, fc } = modbusFrameLength(bytes, offset, h) || {};
+    if (!len || len < 0) continue;
+    if (offset + len > bytes.length) continue;
+    const frame = bytes.slice(offset, offset + len);
+    const bodyLen = frame.length - 2;
+    const calcCrc = crc16Modbus(frame.slice(0, bodyLen));
+    const recCrc = frame[bodyLen] | (frame[bodyLen + 1] << 8);
+    if (calcCrc === recCrc) {
+      return { frame, len, type, fc };
+    }
+  }
+  return null;
+}
+
+/**
+ * Bytes array → compact uppercase hex string (no spaces)
+ */
+function bytesToHexCompact(bytes) {
+  return bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join('');
+}
+
+/**
+ * Bytes array → spaced uppercase hex string
+ */
+function bytesToHexSpaced(bytes) {
+  return bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+}
+
+
+// Log a simplified Modbus analysis result (CRC Status only)
+function logModbusAnalysis(consoleBody, frame, frameType, timeTagEnabled, consoleType) {
+  const isRequest = (frameType === 'request');
+  const label = isRequest ? '[MODBUS REQUEST]' : '[MODBUS RESPOND]';
+  
+  // Calculate CRC to verify
+  const bodyLen = frame.length - 2;
+  const calcCrc = crc16Modbus(frame.slice(0, bodyLen));
+  const recCrc = frame[bodyLen] | (frame[bodyLen + 1] << 8);
+  const isOk = (calcCrc === recCrc);
+  
+  // Format CRC as 0xXXXX
+  const crcVal = ((frame[frame.length - 1] << 8) | frame[frame.length - 2]).toString(16).toUpperCase().padStart(4, '0');
+  const text = `${label} CRC:0x${crcVal}`;
+  
+  // Add to console log (which returns the line element and records history)
+  const lineEl = addLogToConsole(consoleBody, text, 'system', timeTagEnabled);
+  if (lineEl) {
+    const badge = document.createElement('span');
+    badge.className = `crc-badge ${isOk ? 'crc-ok' : 'crc-err'}`;
+    badge.textContent = isOk ? 'CRC: OK' : 'CRC: ERR';
+    lineEl.appendChild(badge);
+  }
+  
+  // Update the last history item to include crcBadge
+  const history = (consoleType === 'inet') ? inetConsoleHistory : cellConsoleHistory;
+  if (history.length > 0) {
+    history[history.length - 1].crcBadge = isOk ? 'OK' : 'ERR';
+  }
+  
+  if (consoleType === 'inet') {
+    saveInetConsoleHistory();
+  } else {
+    saveCellConsoleHistory();
+  }
+}
+
+// ── Cellular stream buffer (accumulates raw bytes from << messages) ──────────
+let cellModbusBuffer = [];           // byte array
+let cellLastSentFrame = null;        // last TX command bytes (Array)
+
+/**
+ * Called when user sends a TX command (Modbus Publish or console send with hex).
+ * Stores the raw bytes of the sent frame for later matching.
+ */
+function cellRecordSentFrame(hexStr) {
+  const clean = hexStr.replace(/\s+/g, '');
+  if (!/^[0-9A-Fa-f]+$/.test(clean) || clean.length % 2 !== 0) return;
+  cellLastSentFrame = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    cellLastSentFrame.push(parseInt(clean.substring(i, i + 2), 16));
+  }
+}
+
+/**
+ * Push new raw bytes into the cellular buffer and try to parse frames.
+ * Returns array of analysis strings to display as [System] lines.
+ */
+function cellAnalyzeBuffer(newBytes, consoleBody, crcEnabled, timeTagEnabled) {
+  if (!crcEnabled) return;
+
+  cellModbusBuffer.push(...newBytes);
+  // Cap buffer to avoid memory growth
+  if (cellModbusBuffer.length > 512) {
+    cellModbusBuffer = cellModbusBuffer.slice(-512);
+  }
+
+  let buf = cellModbusBuffer;
+  let offset = 0;
+
+  while (offset < buf.length) {
+    let isCommandEcho = false;
+    let cmdLen = 0;
+    
+    // Check if buf starts with (or contains near start) our command frame
+    if (cellLastSentFrame && cellLastSentFrame.length >= 4) {
+      const remainingBytes = buf.length - offset;
+      if (remainingBytes >= cellLastSentFrame.length) {
+        let match = true;
+        for (let j = 0; j < cellLastSentFrame.length; j++) {
+          if (buf[offset + j] !== cellLastSentFrame[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          isCommandEcho = true;
+          cmdLen = cellLastSentFrame.length;
+        }
+      } else {
+        // The buffer ends with a partial match of the command echo.
+        // We should wait for more bytes to confirm.
+        let partialMatch = true;
+        for (let j = 0; j < remainingBytes; j++) {
+          if (buf[offset + j] !== cellLastSentFrame[j]) {
+            partialMatch = false;
+            break;
+          }
+        }
+        if (partialMatch) {
+          break; // wait for more bytes
+        }
+      }
+    }
+
+    if (isCommandEcho) {
+      const cmdFrame = buf.slice(offset, offset + cmdLen);
+      logModbusAnalysis(consoleBody, cmdFrame, 'request', timeTagEnabled, 'cell');
+      offset += cmdLen;
+      // Clear last sent frame since we matched and logged it
+      cellLastSentFrame = null;
+    } else {
+      // Scan for any Modbus frame
+      const parsed = tryParseModbusAt(buf, offset, 'auto');
+      if (parsed) {
+        logModbusAnalysis(consoleBody, parsed.frame, parsed.type, timeTagEnabled, 'cell');
+        offset += parsed.len;
+      } else {
+        // If we can't parse a frame, check if it's incomplete or invalid
+        const { len } = modbusFrameLength(buf, offset, 'auto') || {};
+        if (len === -1) {
+          // Incomplete frame at the end of the buffer: stop and wait for more data
+          break;
+        }
+        // Invalid byte: skip it
+        offset++;
+      }
+    }
+  }
+
+  // Clear consumed bytes
+  if (offset > 0) {
+    cellModbusBuffer = buf.slice(offset);
+  }
+}
+
+// ── Internet MQTT fragment buffer (accumulates hex payload bytes) ─────────────
+let inetModbusBuffer = [];   // byte array assembled from hex fragments
+
+/**
+ * Called for each RX payload on the inet console.
+ * Payload may be a latin-1 binary string or a hex string.
+ */
+function inetAnalyzePayload(rawPayload, consoleBody, crcEnabled, timeTagEnabled) {
+  if (!crcEnabled) return;
+
+  // Convert rawPayload to bytes
+  // If the payload looks like a hex string (compact or spaced), decode it
+  const stripped = rawPayload.replace(/\s+/g, '');
+  let newBytes = [];
+  if (/^[0-9A-Fa-f]+$/.test(stripped) && stripped.length % 2 === 0 && stripped.length >= 4) {
+    for (let i = 0; i < stripped.length; i += 2) {
+      newBytes.push(parseInt(stripped.substring(i, i + 2), 16));
+    }
+  } else {
+    // Binary payload: take raw charCodes
+    for (let i = 0; i < rawPayload.length; i++) {
+      newBytes.push(rawPayload.charCodeAt(i) & 0xFF);
+    }
+  }
+
+  inetModbusBuffer.push(...newBytes);
+  if (inetModbusBuffer.length > 512) {
+    inetModbusBuffer = inetModbusBuffer.slice(-512);
+  }
+
+  let offset = 0;
+  let buf = inetModbusBuffer;
+
+  // Try to scan for complete Modbus frames
+  while (offset < buf.length) {
+    const parsed = tryParseModbusAt(buf, offset, 'auto');
+    if (parsed) {
+      logModbusAnalysis(consoleBody, parsed.frame, parsed.type, timeTagEnabled, 'inet');
+      offset += parsed.len;
+    } else {
+      // Check if we just need more data (incomplete frame at end)
+      const { len } = modbusFrameLength(buf, offset, 'auto') || {};
+      if (len === -1) break;   // wait for more bytes
+      offset++;                // skip unrecognised byte
+    }
+  }
+
+  if (offset > 0) {
+    inetModbusBuffer = buf.slice(offset);
+  }
+}
+
+function addLogToConsole(consoleBody, text, type = 'system', timeTagEnabled = true) {
+  const timePrefix = timeTagEnabled ? getFormattedTime() + ' ' : '';
+  const line = document.createElement('div');
+  line.className = 'console-line';
+  
+  if (type === 'system') line.classList.add('system-msg');
+  else if (type === 'send') line.classList.add('send-msg');
+  else if (type === 'recv') line.classList.add('recv-msg');
+  else if (type === 'error') line.classList.add('error-msg');
+  
+  line.textContent = timePrefix + text;
+  consoleBody.appendChild(line);
+  
+  // Truncate to keep performance smooth
+  if (consoleBody.children.length > 500) {
+    consoleBody.removeChild(consoleBody.firstChild);
+  }
+
+  // Push to history
+  const historyItem = {
+    type: type,
+    text: text,
+    timestamp: timeTagEnabled ? getFormattedTime() : ''
+  };
+
+  if (consoleBody === inetConsoleBody) {
+    inetConsoleHistory.push(historyItem);
+    saveInetConsoleHistory();
+  } else if (consoleBody === cellConsoleBody) {
+    cellConsoleHistory.push(historyItem);
+    saveCellConsoleHistory();
+  }
+  
+  return line;
+}
+
+function rebuildActiveSubsList() {
+  if (!inetActiveSubsList) return;
+  inetActiveSubsList.innerHTML = '';
+  
+  Object.keys(inetSubs).forEach(topic => {
+    const qos = inetSubs[topic];
+    const li = document.createElement('li');
+    li.className = 'active-sub-item';
+    li.innerHTML = `
+      <span class="active-sub-topic">${topic} (Q${qos})</span>
+      <button class="btn-unsub-mini" data-topic="${topic}">✖</button>
+    `;
+    inetActiveSubsList.appendChild(li);
+  });
+  
+  // Attach unsub handlers
+  inetActiveSubsList.querySelectorAll('.btn-unsub-mini').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const topic = e.target.getAttribute('data-topic');
+      if (inetSocket && inetSocket.readyState === WebSocket.OPEN) {
+        inetSocket.send(JSON.stringify({ action: 'unsubscribe', topic }));
+      }
+      delete inetSubs[topic];
+      saveInetSettings();
+      rebuildActiveSubsList();
+    });
+  });
+}
+
+function connectInetBroker() {
+  if (inetSocket && inetSocket.readyState === WebSocket.OPEN) {
+    inetSocket.send(JSON.stringify({ action: 'close' }));
+    inetSocket.close();
+    return;
+  }
+  
+  const host = inetBrokerHost.value;
+  const port = inetBrokerPort.value;
+  const cid = inetBrokerCid.value;
+  const user = inetBrokerUser.value;
+  const pwd = inetBrokerPwd.value;
+  
+  if (!host || !cid) {
+    addLogToConsole(inetConsoleBody, '[System] Error: Host address and Client ID are required.', 'error', chkInetTimeTag.checked);
+    return;
+  }
+  
+  addLogToConsole(inetConsoleBody, `[System] Connecting to MQTT Broker at ${host}:${port}...`, 'system', chkInetTimeTag.checked);
+  btnInetConnect.disabled = true;
+  
+  const wsUrl = `${BASE_URL.replace('http://', 'ws://')}/ws/mqtt?host=${host}&port=${port}&cid=${cid}&user=${user}&pwd=${pwd}`;
+  
+  try {
+    inetSocket = new WebSocket(wsUrl);
+    
+    inetSocket.onopen = () => {
+      btnInetConnect.disabled = false;
+      btnInetConnect.textContent = 'Disconnect Broker';
+      btnInetConnect.style.background = 'linear-gradient(135deg, var(--danger), #b02a37)';
+      if (btnInetPub) btnInetPub.disabled = false;
+      
+      // Auto subscribe to active subs list
+      Object.keys(inetSubs).forEach(topic => {
+        const qos = inetSubs[topic];
+        inetSocket.send(JSON.stringify({ action: 'subscribe', topic, qos }));
+      });
+    };
+    
+    inetSocket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        
+        if (msg.type === 'status') {
+          if (msg.status === 'connected') {
+            setMqttBadgeStatus(true);
+            addLogToConsole(inetConsoleBody, '[System] Connected to MQTT Broker successfully.', 'system', chkInetTimeTag.checked);
+          } else if (msg.status === 'disconnected') {
+            addLogToConsole(inetConsoleBody, '[System] Disconnected from MQTT Broker.', 'system', chkInetTimeTag.checked);
+            closeInetSocketUI();
+          } else if (msg.status.startsWith('refused')) {
+            addLogToConsole(inetConsoleBody, `[System] Connection refused: ${msg.status}`, 'error', chkInetTimeTag.checked);
+            closeInetSocketUI();
+          }
+        } else if (msg.type === 'msg') {
+          const hexMode = chkInetHexMode ? chkInetHexMode.checked : false;
+          const crcEnabled = chkInetModbusCrc ? chkInetModbusCrc.checked : false;
+          const displayPayload = formatMqttPayload(msg.payload, hexMode);
+          
+          // Store raw for live re-rendering
+          inetConsoleHistory.push({ type: 'recv', topic: msg.topic, rawPayload: msg.payload, timestamp: getFormattedTime() });
+          if (inetConsoleHistory.length > 500) inetConsoleHistory.shift();
+          saveInetConsoleHistory();
+          
+          const timePrefix = chkInetTimeTag && chkInetTimeTag.checked ? getFormattedTime() + ' ' : '';
+          const line = document.createElement('div');
+          line.className = 'console-line recv-msg';
+          line.textContent = `${timePrefix}<< [${msg.topic}] ${displayPayload}`;
+          line.dataset.rawPayload = msg.payload;
+          line.dataset.topic = msg.topic;
+          inetConsoleBody.appendChild(line);
+          
+          if (crcEnabled) {
+            inetAnalyzePayload(msg.payload, inetConsoleBody, crcEnabled, chkInetTimeTag && chkInetTimeTag.checked);
+          }
+          
+          if (inetConsoleBody.children.length > 500) {
+            inetConsoleBody.removeChild(inetConsoleBody.firstChild);
+          }
+          
+          // Performance latency tracking
+          performanceTracker.registerInternetMsg(msg.payload);
+          
+          if (chkInetAutoscroll && chkInetAutoscroll.checked) {
+            inetConsoleBody.scrollTop = inetConsoleBody.scrollHeight;
+          }
+        } else if (msg.type === 'log') {
+          addLogToConsole(inetConsoleBody, `[Broker Log] ${msg.message}`, 'system', chkInetTimeTag.checked);
+        } else if (msg.type === 'error') {
+          addLogToConsole(inetConsoleBody, `[Error] ${msg.message}`, 'error', chkInetTimeTag.checked);
+        }
+      } catch (err) {
+        console.error('Failed to parse Internet MQTT socket message:', err);
+      }
+    };
+    
+    inetSocket.onclose = () => {
+      closeInetSocketUI();
+    };
+    
+    inetSocket.onerror = (err) => {
+      addLogToConsole(inetConsoleBody, '[System Error] WebSocket error occurred.', 'error', chkInetTimeTag.checked);
+      closeInetSocketUI();
+    };
+    
+  } catch (err) {
+    btnInetConnect.disabled = false;
+    addLogToConsole(inetConsoleBody, `[System Error] Failed to open socket: ${err.message}`, 'error', chkInetTimeTag.checked);
+  }
+}
+
+function closeInetSocketUI() {
+  setMqttBadgeStatus(false);
+  btnInetConnect.disabled = false;
+  btnInetConnect.textContent = 'Connect Broker';
+  btnInetConnect.style.background = '';
+  if (btnInetPub) btnInetPub.disabled = true;
+  inetSocket = null;
+}
+
+if (btnInetConnect) btnInetConnect.addEventListener('click', connectInetBroker);
+
+if (btnInetSub) {
+  btnInetSub.addEventListener('click', () => {
+    const topic = inetSubTopic.value.trim();
+    const qos = parseInt(inetSubQos.value);
+    if (!topic) return;
+    
+    if (inetSocket && inetSocket.readyState === WebSocket.OPEN) {
+      inetSocket.send(JSON.stringify({ action: 'subscribe', topic, qos }));
+    }
+    
+    inetSubs[topic] = qos;
+    saveInetSettings();
+    rebuildActiveSubsList();
+  });
+}
+
+if (btnInetPub) {
+  btnInetPub.addEventListener('click', () => {
+    const topic = inetPubTopic.value.trim();
+    const qos = parseInt(inetPubQos.value);
+    const payload = inetPubPayload.value;
+    if (!topic) return;
+    
+    if (inetSocket && inetSocket.readyState === WebSocket.OPEN) {
+      inetSocket.send(JSON.stringify({ action: 'publish', topic, payload, qos }));
+      const timePrefix = chkInetTimeTag && chkInetTimeTag.checked ? getFormattedTime() + ' ' : '';
+      const line = document.createElement('div');
+      line.className = 'console-line send-msg';
+      line.textContent = `${timePrefix}>> [${topic}] ${payload}`;
+      inetConsoleBody.appendChild(line);
+
+      inetConsoleHistory.push({ type: 'send', topic: topic, payload: payload, timestamp: getFormattedTime() });
+      saveInetConsoleHistory();
+
+      const crcEnabled = chkInetModbusCrc ? chkInetModbusCrc.checked : false;
+      if (crcEnabled) {
+        inetAnalyzePayload(payload, inetConsoleBody, crcEnabled, chkInetTimeTag && chkInetTimeTag.checked);
+      }
+
+      if (inetConsoleBody.children.length > 500) inetConsoleBody.removeChild(inetConsoleBody.firstChild);
+      if (chkInetAutoscroll && chkInetAutoscroll.checked) {
+        inetConsoleBody.scrollTop = inetConsoleBody.scrollHeight;
+      }
+    }
+  });
+}
+
+if (btnClearInetConsole) {
+  btnClearInetConsole.addEventListener('click', () => {
+    inetConsoleBody.innerHTML = '';
+    inetConsoleHistory = [];
+    localStorage.removeItem('inet_console_history');
+  });
+}
+
+// Rebuild inet console lines when HEX mode or CRC check changes
+function rebuildInetConsole() {
+  inetConsoleBody.innerHTML = '';
+  const hexMode = chkInetHexMode ? chkInetHexMode.checked : false;
+  const crcEnabled = chkInetModbusCrc ? chkInetModbusCrc.checked : false;
+  const showTime = chkInetTimeTag ? chkInetTimeTag.checked : true;
+
+  inetConsoleHistory.forEach(item => {
+    const timePrefix = showTime ? (item.timestamp || getFormattedTime()) + ' ' : '';
+    const line = document.createElement('div');
+    line.className = 'console-line';
+
+    if (item.type === 'recv') {
+      line.classList.add('recv-msg');
+      const displayPayload = formatMqttPayload(item.rawPayload, hexMode);
+      line.textContent = `${timePrefix}<< [${item.topic}] ${displayPayload}`;
+      line.dataset.rawPayload = item.rawPayload;
+      line.dataset.topic = item.topic;
+      inetConsoleBody.appendChild(line);
+    } else if (item.type === 'send') {
+      line.classList.add('send-msg');
+      line.textContent = `${timePrefix}>> [${item.topic}] ${item.payload}`;
+      inetConsoleBody.appendChild(line);
+    } else if (item.type === 'system' || item.type === 'error') {
+      line.classList.add(item.type === 'error' ? 'error-msg' : 'system-msg');
+      line.textContent = `${timePrefix}${item.text}`;
+      inetConsoleBody.appendChild(line);
+      
+      if (item.crcBadge && crcEnabled) {
+        const badge = document.createElement('span');
+        badge.className = `crc-badge ${item.crcBadge === 'OK' ? 'crc-ok' : 'crc-err'}`;
+        badge.textContent = `CRC: ${item.crcBadge}`;
+        line.appendChild(badge);
+      }
+    }
+  });
+
+  if (chkInetAutoscroll && chkInetAutoscroll.checked) {
+    inetConsoleBody.scrollTop = inetConsoleBody.scrollHeight;
+  }
+}
+
+if (chkInetHexMode) {
+  chkInetHexMode.addEventListener('change', () => {
+    saveInetSettings();
+    rebuildInetConsole();
+  });
+}
+if (chkInetModbusCrc) {
+  chkInetModbusCrc.addEventListener('change', () => {
+    saveInetSettings();
+    rebuildInetConsole();
+  });
+}
+
+[inetBrokerHost, inetBrokerPort, inetBrokerCid, inetBrokerUser, inetBrokerPwd, inetSubTopic, inetSubQos, inetPubTopic, inetPubQos, inetPubPayload].forEach(el => {
+  if (el) el.addEventListener('change', saveInetSettings);
+});
+if (chkInetTimeTag) {
+  chkInetTimeTag.addEventListener('change', () => {
+    saveInetSettings();
+    rebuildInetConsole();
+  });
+}
+if (chkInetAutoscroll) {
+  chkInetAutoscroll.addEventListener('change', saveInetSettings);
+}
+
+
+// ==========================================
+// CELLULAR MQTT (DTU CONFIG)
+// ==========================================
+let cellSocket = null;
+const cellPortSelect = document.getElementById('cell-port-select');
+const cellBaudSelect = document.getElementById('cell-baud-select');
+const cellDataBitsSelect = document.getElementById('cell-data-bits-select');
+const cellStopBitsSelect = document.getElementById('cell-stop-bits-select');
+const cellParitySelect = document.getElementById('cell-parity-select');
+const btnCellConnect = document.getElementById('btn-cell-connect');
+const btnCellReadAll = document.getElementById('btn-cell-read-all');
+
+const cellBrokerIp = document.getElementById('cell-broker-ip');
+const cellBrokerPort = document.getElementById('cell-broker-port');
+const cellBrokerCid = document.getElementById('cell-broker-cid');
+const cellBrokerUser = document.getElementById('cell-broker-user');
+const cellBrokerPwd = document.getElementById('cell-broker-pwd');
+const btnCellApplyMode = document.getElementById('btn-cell-apply-mode');
+
+const cellDtuBaud = document.getElementById('cell-dtu-baud');
+const cellDtuData = document.getElementById('cell-dtu-data');
+const cellDtuStop = document.getElementById('cell-dtu-stop');
+const cellDtuParity = document.getElementById('cell-dtu-parity');
+const btnCellReloadUart = document.getElementById('btn-cell-reload-uart');
+const btnCellApplyUart = document.getElementById('btn-cell-apply-uart');
+
+const btnCellReloadSubs = document.getElementById('btn-cell-reload-subs');
+const btnCellApplySubs = document.getElementById('btn-cell-apply-subs');
+
+const btnCellReloadPubs = document.getElementById('btn-cell-reload-pubs');
+const btnCellApplyPubs = document.getElementById('btn-cell-apply-pubs');
+
+const cellWillEn = document.getElementById('cell-will-en');
+const cellWillTopic = document.getElementById('cell-will-topic');
+const cellWillMsg = document.getElementById('cell-will-msg');
+const cellWillQos = document.getElementById('cell-will-qos');
+const cellWillRetain = document.getElementById('cell-will-retain');
+const btnCellApplyWill = document.getElementById('btn-cell-apply-will');
+
+const cellCleanSession = document.getElementById('cell-clean-session');
+const cellKeepAlive = document.getElementById('cell-keep-alive');
+const btnCellReloadMqttcon = document.getElementById('btn-cell-reload-mqttcon');
+const btnCellApplyMqttcon = document.getElementById('btn-cell-apply-mqttcon');
+
+const cellModbusIdHex = document.getElementById('cell-modbus-id-hex');
+const cellModbusIdDec = document.getElementById('cell-modbus-id-dec');
+const cellModbusFunc = document.getElementById('cell-modbus-func');
+const cellModbusAddrHex = document.getElementById('cell-modbus-addr-hex');
+const cellModbusAddrDec = document.getElementById('cell-modbus-addr-dec');
+const cellModbusQty = document.getElementById('cell-modbus-qty');
+const modbusGenHexDisplay = document.getElementById('modbus-gen-hex-display');
+const btnCellPubModbus = document.getElementById('btn-cell-pub-modbus');
+
+const cellTaskCycle = document.getElementById('cell-task-cycle');
+const cellTaskInterval = document.getElementById('cell-task-interval');
+const cellTaskDistEn = document.getElementById('cell-task-dist-en');
+const cellTaskDistFmt = document.getElementById('cell-task-dist-fmt');
+const btnCellReloadPoll = document.getElementById('btn-cell-reload-poll');
+const btnCellApplyPoll = document.getElementById('btn-cell-apply-poll');
+const btnCellPollAdd = document.getElementById('btn-cell-poll-add');
+const pollingCommandsTable = document.getElementById('polling-commands-table') ? document.getElementById('polling-commands-table').querySelector('tbody') : null;
+
+const btnCellCheckNet = document.getElementById('btn-cell-check-net');
+
+const chkCellTimeTag = document.getElementById('chk-cell-timetag');
+const chkCellAutoscroll = document.getElementById('chk-cell-autoscroll');
+const chkCellHexMode = document.getElementById('chk-cell-hex-mode');
+const chkCellModbusCrc = document.getElementById('chk-cell-modbus-crc');
+const btnClearCellConsole = document.getElementById('btn-clear-cell-console');
+const cellConsoleBody = document.getElementById('cell-console-body');
+const cellConsoleSendInput = document.getElementById('cell-console-send-input');
+const btnCellConsoleSend = document.getElementById('btn-cell-console-send');
+const cellLineEndingSelect = document.getElementById('cell-line-ending-select');
+
+let cellPreferredPort = '';
+
+// Load/Save Cellular settings from localstorage
+function loadCellSettings() {
+  const settings = JSON.parse(localStorage.getItem('cell_mqtt_settings'));
+  if (settings) {
+    if (cellBaudSelect && settings.baud) cellBaudSelect.value = settings.baud;
+    if (cellDataBitsSelect && settings.dataBits) cellDataBitsSelect.value = settings.dataBits;
+    if (cellStopBitsSelect && settings.stopBits) cellStopBitsSelect.value = settings.stopBits;
+    if (cellParitySelect && settings.parity) cellParitySelect.value = settings.parity;
+    if (cellBrokerIp && settings.brokerIp) cellBrokerIp.value = settings.brokerIp;
+    if (cellBrokerPort && settings.brokerPort) cellBrokerPort.value = settings.brokerPort;
+    if (cellBrokerCid && settings.brokerCid) cellBrokerCid.value = settings.brokerCid;
+    if (cellBrokerUser && settings.brokerUser !== undefined) cellBrokerUser.value = settings.brokerUser;
+    if (cellBrokerPwd && settings.brokerPwd !== undefined) cellBrokerPwd.value = settings.brokerPwd;
+    if (cellDtuBaud && settings.dtuBaud) cellDtuBaud.value = settings.dtuBaud;
+    if (cellDtuData && settings.dtuData) cellDtuData.value = settings.dtuData;
+    if (cellDtuStop && settings.dtuStop) cellDtuStop.value = settings.dtuStop;
+    if (cellDtuParity && settings.dtuParity) cellDtuParity.value = settings.dtuParity;
+    
+    if (settings.subsList) {
+      settings.subsList.forEach((sub, i) => {
+        const en = document.getElementById(`cell-sub-en-${i}`);
+        const t = document.getElementById(`cell-sub-t-${i}`);
+        const q = document.getElementById(`cell-sub-q-${i}`);
+        if (en) en.checked = sub.en;
+        if (t) t.value = sub.topic;
+        if (q) q.value = sub.qos;
+      });
+    }
+    
+    if (settings.pubsList) {
+      settings.pubsList.forEach((pub, i) => {
+        const en = document.getElementById(`cell-pub-en-${i}`);
+        const t = document.getElementById(`cell-pub-t-${i}`);
+        const q = document.getElementById(`cell-pub-q-${i}`);
+        const r = document.getElementById(`cell-pub-r-${i}`);
+        if (en) en.checked = pub.en;
+        if (t) t.value = pub.topic;
+        if (q) q.value = pub.qos;
+        if (r) r.checked = pub.retain;
+      });
+    }
+
+    if (cellWillEn && settings.willEn !== undefined) cellWillEn.checked = settings.willEn;
+    if (cellWillTopic && settings.willTopic) cellWillTopic.value = settings.willTopic;
+    if (cellWillMsg && settings.willMsg) cellWillMsg.value = settings.willMsg;
+    if (cellWillQos && settings.willQos) cellWillQos.value = settings.willQos;
+    if (cellWillRetain && settings.willRetain !== undefined) cellWillRetain.checked = settings.willRetain;
+    if (cellCleanSession && settings.cleanSession !== undefined) cellCleanSession.checked = settings.cleanSession;
+    if (cellKeepAlive && settings.keepAlive) cellKeepAlive.value = settings.keepAlive;
+    
+    if (cellModbusIdHex && settings.modbusIdHex) cellModbusIdHex.value = settings.modbusIdHex;
+    if (cellModbusIdDec && settings.modbusIdDec) cellModbusIdDec.value = settings.modbusIdDec;
+    if (cellModbusFunc && settings.modbusFunc) cellModbusFunc.value = settings.modbusFunc;
+    if (cellModbusAddrHex && settings.modbusAddrHex) cellModbusAddrHex.value = settings.modbusAddrHex;
+    if (cellModbusAddrDec && settings.modbusAddrDec) cellModbusAddrDec.value = settings.modbusAddrDec;
+    if (cellModbusQty && settings.modbusQty) cellModbusQty.value = settings.modbusQty;
+    
+    if (cellTaskCycle && settings.taskCycle) cellTaskCycle.value = settings.taskCycle;
+    if (cellTaskInterval && settings.taskInterval) cellTaskInterval.value = settings.taskInterval;
+    if (cellTaskDistEn && settings.taskDistEn !== undefined) cellTaskDistEn.checked = settings.taskDistEn;
+    if (cellTaskDistFmt && settings.taskDistFmt) cellTaskDistFmt.value = settings.taskDistFmt;
+    if (cellLineEndingSelect && settings.lineEnding) cellLineEndingSelect.value = settings.lineEnding;
+    if (chkCellTimeTag && settings.timeTag !== undefined) chkCellTimeTag.checked = settings.timeTag;
+    if (chkCellAutoscroll && settings.autoscroll !== undefined) chkCellAutoscroll.checked = settings.autoscroll;
+    if (chkCellHexMode && settings.hexMode !== undefined) chkCellHexMode.checked = settings.hexMode;
+    if (chkCellModbusCrc && settings.modbusCrc !== undefined) chkCellModbusCrc.checked = settings.modbusCrc;
+    
+    cellPreferredPort = settings.port || 'COM6';
+  } else {
+    cellPreferredPort = 'COM6';
+  }
+}
+
+function saveCellSettings() {
+  const subsList = [];
+  for (let i = 0; i < 4; i++) {
+    const en = document.getElementById(`cell-sub-en-${i}`);
+    const t = document.getElementById(`cell-sub-t-${i}`);
+    const q = document.getElementById(`cell-sub-q-${i}`);
+    subsList.push({
+      en: en ? en.checked : false,
+      topic: t ? t.value : '',
+      qos: q ? parseInt(q.value) : 0
+    });
+  }
+  
+  const pubsList = [];
+  for (let i = 0; i < 4; i++) {
+    const en = document.getElementById(`cell-pub-en-${i}`);
+    const t = document.getElementById(`cell-pub-t-${i}`);
+    const q = document.getElementById(`cell-pub-q-${i}`);
+    const r = document.getElementById(`cell-pub-r-${i}`);
+    pubsList.push({
+      en: en ? en.checked : false,
+      topic: t ? t.value : '',
+      qos: q ? parseInt(q.value) : 0,
+      retain: r ? r.checked : false
+    });
+  }
+
+  const settings = {
+    port: cellPortSelect ? cellPortSelect.value : '',
+    baud: cellBaudSelect ? cellBaudSelect.value : 115200,
+    dataBits: cellDataBitsSelect ? cellDataBitsSelect.value : 8,
+    stopBits: cellStopBitsSelect ? cellStopBitsSelect.value : 1,
+    parity: cellParitySelect ? cellParitySelect.value : 'None',
+    brokerIp: cellBrokerIp ? cellBrokerIp.value : '',
+    brokerPort: cellBrokerPort ? cellBrokerPort.value : '',
+    brokerCid: cellBrokerCid ? cellBrokerCid.value : '',
+    brokerUser: cellBrokerUser ? cellBrokerUser.value : '',
+    brokerPwd: cellBrokerPwd ? cellBrokerPwd.value : '',
+    dtuBaud: cellDtuBaud ? cellDtuBaud.value : 115200,
+    dtuData: cellDtuData ? cellDtuData.value : 8,
+    dtuStop: cellDtuStop ? cellDtuStop.value : 1,
+    dtuParity: cellDtuParity ? cellDtuParity.value : 'None',
+    subsList,
+    pubsList,
+    willEn: cellWillEn ? cellWillEn.checked : false,
+    willTopic: cellWillTopic ? cellWillTopic.value : '',
+    willMsg: cellWillMsg ? cellWillMsg.value : '',
+    willQos: cellWillQos ? cellWillQos.value : 0,
+    willRetain: cellWillRetain ? cellWillRetain.checked : false,
+    cleanSession: cellCleanSession ? cellCleanSession.checked : true,
+    keepAlive: cellKeepAlive ? cellKeepAlive.value : 60,
+    modbusIdHex: cellModbusIdHex ? cellModbusIdHex.value : '',
+    modbusIdDec: cellModbusIdDec ? cellModbusIdDec.value : '',
+    modbusFunc: cellModbusFunc ? cellModbusFunc.value : '03',
+    modbusAddrHex: cellModbusAddrHex ? cellModbusAddrHex.value : '',
+    modbusAddrDec: cellModbusAddrDec ? cellModbusAddrDec.value : '',
+    modbusQty: cellModbusQty ? cellModbusQty.value : '',
+    taskCycle: cellTaskCycle ? cellTaskCycle.value : '',
+    taskInterval: cellTaskInterval ? cellTaskInterval.value : '',
+    taskDistEn: cellTaskDistEn ? cellTaskDistEn.checked : false,
+    taskDistFmt: cellTaskDistFmt ? cellTaskDistFmt.value : '',
+    lineEnding: cellLineEndingSelect ? cellLineEndingSelect.value : 'crlf',
+    timeTag: chkCellTimeTag ? chkCellTimeTag.checked : true,
+    autoscroll: chkCellAutoscroll ? chkCellAutoscroll.checked : true,
+    hexMode: chkCellHexMode ? chkCellHexMode.checked : false,
+    modbusCrc: chkCellModbusCrc ? chkCellModbusCrc.checked : false
+  };
+  localStorage.setItem('cell_mqtt_settings', JSON.stringify(settings));
+}
+
+function updateCellPortsDropdown(ports, details = {}) {
+  if (!cellPortSelect) return;
+  if (cellSocket && cellSocket.readyState === WebSocket.OPEN) return;
+  
+  const currentSelection = cellPortSelect.value || cellPreferredPort;
+  cellPortSelect.innerHTML = '';
+  
+  if (ports.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No Active Ports';
+    cellPortSelect.appendChild(opt);
+    return;
+  }
+  
+  ports.forEach(port => {
+    const opt = document.createElement('option');
+    opt.value = port;
+    const info = details[port] || {};
+    const occupiedSuffix = info.occupied ? ' (Occupied)' : '';
+    opt.textContent = port + occupiedSuffix;
+    if (port === currentSelection) opt.selected = true;
+    cellPortSelect.appendChild(opt);
+  });
+  
+  if (!ports.includes(currentSelection)) {
+    cellPortSelect.selectedIndex = 0;
+  }
+}
+
+// Hook into existing serial ports polling in renderer.js
+const originalUpdateComPortDropdown = updateComPortDropdown;
+updateComPortDropdown = function(ports, details) {
+  originalUpdateComPortDropdown(ports, details);
+  updateCellPortsDropdown(ports, details);
+};
+
+function connectCellularDTU() {
+  if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+    cellSocket.send(JSON.stringify({ action: 'close' }));
+    cellSocket.close();
+    return;
+  }
+  
+  const port = cellPortSelect.value;
+  const baud = cellBaudSelect.value;
+  const bytesize = cellDataBitsSelect.value;
+  const stopbits = cellStopBitsSelect.value;
+  const parity = cellParitySelect.value === 'None' ? 'N' : cellParitySelect.value[0];
+  
+  if (!port) {
+    addLogToConsole(cellConsoleBody, '[System] Error: No COM port selected.', 'error', chkCellTimeTag.checked);
+    return;
+  }
+  
+  addLogToConsole(cellConsoleBody, `[System] Connecting to Cellular DTU on ${port} at ${baud} baud...`, 'system', chkCellTimeTag.checked);
+  btnCellConnect.disabled = true;
+  
+  const wsUrl = `${BASE_URL.replace('http://', 'ws://')}/ws/cellular?port=${port}&baud=${baud}&bytesize=${bytesize}&stopbits=${stopbits}&parity=${parity}`;
+  
+  try {
+    cellSocket = new WebSocket(wsUrl);
+    
+    cellSocket.onopen = () => {
+      btnCellConnect.disabled = false;
+      btnCellConnect.textContent = 'Disconnect Port';
+      btnCellConnect.style.background = 'linear-gradient(135deg, var(--danger), #b02a37)';
+      
+      toggleCellControlButtons(true);
+      addLogToConsole(cellConsoleBody, `[System] DTU Serial Port connected successfully. Ready.`, 'system', chkCellTimeTag.checked);
+    };
+    
+    cellSocket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        const hexMode = chkCellHexMode ? chkCellHexMode.checked : false;
+        const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+        
+        if (msg.type === 'data') {
+          let displayData = msg.data;
+          
+          if (hexMode) {
+            displayData = stringToHex(msg.data);
+          } else {
+            // Auto: if data looks like a compact hex string, format with spaces
+            const cleanHex = msg.data.replace(/\s+/g, '');
+            if (/^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
+              displayData = formatHexWithSpaces(cleanHex);
+            }
+          }
+          
+          const timePrefix = chkCellTimeTag && chkCellTimeTag.checked ? getFormattedTime() + ' ' : '';
+          const line = document.createElement('div');
+          line.className = 'console-line recv-msg';
+          line.textContent = `${timePrefix}<< ${displayData}`;
+          line.dataset.rawData = msg.data;
+          cellConsoleBody.appendChild(line);
+          
+          cellConsoleHistory.push({ type: 'recv', data: msg.data, timestamp: getFormattedTime() });
+          saveCellConsoleHistory();
+          
+          if (cellConsoleBody.children.length > 500) cellConsoleBody.removeChild(cellConsoleBody.firstChild);
+          
+          const bytes = [];
+          for (let i = 0; i < msg.data.length; i++) {
+            bytes.push(msg.data.charCodeAt(i) & 0xFF);
+          }
+          const modbusPackets = findModbusPackets(bytes);
+          modbusPackets.forEach(pkt => {
+            performanceTracker.registerCellularMsg(pkt);
+          });
+          
+          if (crcEnabled) {
+            cellAnalyzeBuffer(bytes, cellConsoleBody, crcEnabled, chkCellTimeTag && chkCellTimeTag.checked);
+          }
+          
+          if (chkCellAutoscroll && chkCellAutoscroll.checked) {
+            cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+          }
+        } else if (msg.type === 'log') {
+          let logType = 'system';
+          let prefix = '';
+          if (msg.direction === 'TX') { logType = 'send'; prefix = '>> '; }
+          else if (msg.direction === 'RX') { logType = 'recv'; prefix = '<< '; }
+          
+          addLogToConsole(cellConsoleBody, `${prefix}${msg.message}`, logType, chkCellTimeTag.checked);
+          if (chkCellAutoscroll && chkCellAutoscroll.checked) {
+            cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+          }
+        } else if (msg.type === 'hw_state') {
+          loadHwStateIntoUI(msg.state);
+        } else if (msg.type === 'network_info') {
+          loadNetworkInfoIntoUI(msg.data);
+        } else if (msg.type === 'error') {
+          addLogToConsole(cellConsoleBody, `[Error] ${msg.message}`, 'error', chkCellTimeTag.checked);
+        }
+      } catch (err) {
+        console.error('Failed to parse Cellular DTU message:', err);
+      }
+    };
+    
+    cellSocket.onclose = () => {
+      closeCellSocketUI();
+    };
+    
+    cellSocket.onerror = (err) => {
+      addLogToConsole(cellConsoleBody, '[System Error] WebSocket error occurred.', 'error', chkCellTimeTag.checked);
+      closeCellSocketUI();
+    };
+  } catch (err) {
+    btnCellConnect.disabled = false;
+    addLogToConsole(cellConsoleBody, `[System Error] Failed to open socket: ${err.message}`, 'error', chkCellTimeTag.checked);
+  }
+}
+
+function closeCellSocketUI() {
+  btnCellConnect.disabled = false;
+  btnCellConnect.textContent = 'Connect Port';
+  btnCellConnect.style.background = '';
+  toggleCellControlButtons(false);
+  cellSocket = null;
+}
+
+function toggleCellControlButtons(enabled) {
+  [btnCellReadAll, btnCellApplyMode, btnCellReloadUart, btnCellApplyUart, btnCellReloadSubs, btnCellApplySubs, btnCellReloadPubs, btnCellApplyPubs, btnCellApplyWill, btnCellReloadMqttcon, btnCellApplyMqttcon, btnCellPubModbus, btnCellReloadPoll, btnCellApplyPoll, btnCellCheckNet, btnCellConsoleSend].forEach(btn => {
+    if (btn) btn.disabled = !enabled;
+  });
+}
+
+function loadHwStateIntoUI(state) {
+  if (!state) return;
+  
+  if (state.work_mode) {
+    const radio = document.querySelector(`input[name="cell-work-mode"][value="${state.work_mode}"]`);
+    if (radio) radio.checked = true;
+  }
+  
+  if (state.mqtt_ip) cellBrokerIp.value = state.mqtt_ip;
+  if (state.mqtt_port) cellBrokerPort.value = state.mqtt_port;
+  if (state.mqtt_cid) cellBrokerCid.value = state.mqtt_cid;
+  if (state.mqtt_user) cellBrokerUser.value = state.mqtt_user;
+  if (state.mqtt_pwd) cellBrokerPwd.value = state.mqtt_pwd;
+  
+  if (state.uart) {
+    cellDtuBaud.value = state.uart.baud;
+    cellDtuData.value = state.uart.data;
+    cellDtuStop.value = state.uart.stop;
+    cellDtuParity.value = state.uart.parity;
+  }
+  
+  if (state.subs) {
+    state.subs.forEach((sub, i) => {
+      const en = document.getElementById(`cell-sub-en-${i}`);
+      const t = document.getElementById(`cell-sub-t-${i}`);
+      const q = document.getElementById(`cell-sub-q-${i}`);
+      if (en) en.checked = sub.en;
+      if (t) t.value = sub.topic;
+      if (q) q.value = sub.qos;
+    });
+  }
+  
+  if (state.pubs) {
+    state.pubs.forEach((pub, i) => {
+      const en = document.getElementById(`cell-pub-en-${i}`);
+      const t = document.getElementById(`cell-pub-t-${i}`);
+      const q = document.getElementById(`cell-pub-q-${i}`);
+      const r = document.getElementById(`cell-pub-r-${i}`);
+      if (en) en.checked = pub.en;
+      if (t) t.value = pub.topic;
+      if (q) q.value = pub.qos;
+      if (r) r.checked = pub.retain;
+    });
+  }
+  
+  if (state.will) {
+    cellWillEn.checked = state.will.en;
+    cellWillTopic.value = state.will.topic;
+    cellWillMsg.value = state.will.msg;
+    cellWillQos.value = state.will.qos;
+    cellWillRetain.checked = state.will.retain;
+  }
+  
+  if (state.clean_session !== undefined) cellCleanSession.checked = state.clean_session;
+  if (state.keep_alive) cellKeepAlive.value = state.keep_alive;
+  
+  if (state.task_mode) {
+    const radio = document.querySelector(`input[name="cell-task-mode"][value="${state.task_mode}"]`);
+    if (radio) radio.checked = true;
+  }
+  
+  if (state.task_cycle) cellTaskCycle.value = state.task_cycle;
+  if (state.task_interval) cellTaskInterval.value = state.task_interval;
+  if (state.enable_identifier !== undefined) cellTaskDistEn.checked = state.enable_identifier;
+  if (state.identifier_format) cellTaskDistFmt.value = state.identifier_format;
+  
+  if (state.polling_list) {
+    rebuildPollingListUI(state.polling_list);
+  }
+  
+  if (state.network_info) {
+    loadNetworkInfoIntoUI(state.network_info);
+  }
+  
+  saveCellSettings();
+  addLogToConsole(cellConsoleBody, '[System] Hardware configurations successfully synced into UI.', 'system', chkCellTimeTag.checked);
+}
+
+function loadNetworkInfoIntoUI(info) {
+  if (!info) return;
+  document.getElementById('net-info-module').textContent = info.MODULE || 'N/A';
+  document.getElementById('net-info-sysinfo').textContent = info.SYSINFO || 'N/A';
+  document.getElementById('net-info-csq').textContent = info.CSQ || 'N/A';
+  document.getElementById('net-info-clk').textContent = info.CLK || 'N/A';
+  document.getElementById('net-info-iccid').textContent = info.ICCID || 'N/A';
+  document.getElementById('net-info-sn').textContent = info.SN || 'N/A';
+  document.getElementById('net-info-imei').textContent = info.IMEI || 'N/A';
+  document.getElementById('net-info-imsi').textContent = info.IMSI || 'N/A';
+}
+
+function rebuildPollingListUI(list) {
+  if (!pollingCommandsTable) return;
+  pollingCommandsTable.innerHTML = '';
+  
+  list.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${item.Index}</td>
+      <td><input type="text" class="form-input poll-cmd-inp" value="${item.Command}" style="font-family: var(--font-mono); font-size:11px;"></td>
+      <td style="text-align: center;"><button class="btn-remove-row">🗑️</button></td>
+    `;
+    pollingCommandsTable.appendChild(tr);
+  });
+  
+  pollingCommandsTable.querySelectorAll('.btn-remove-row').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.target.closest('tr').remove();
+      renumberPollingRows();
+    });
+  });
+}
+
+function renumberPollingRows() {
+  if (!pollingCommandsTable) return;
+  const rows = pollingCommandsTable.querySelectorAll('tr');
+  rows.forEach((row, i) => {
+    row.querySelector('td').textContent = i + 1;
+  });
+}
+
+function getPollingListFromUI() {
+  const list = [];
+  if (!pollingCommandsTable) return list;
+  const rows = pollingCommandsTable.querySelectorAll('tr');
+  rows.forEach((row, i) => {
+    const cmd = row.querySelector('.poll-cmd-inp').value.trim();
+    if (cmd) {
+      list.push({ Index: i + 1, Command: cmd });
+    }
+  });
+  return list;
+}
+
+if (btnCellPollAdd) {
+  btnCellPollAdd.addEventListener('click', () => {
+    if (!pollingCommandsTable) return;
+    const count = pollingCommandsTable.querySelectorAll('tr').length;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${count + 1}</td>
+      <td><input type="text" class="form-input poll-cmd-inp" placeholder="e.g. 2F 03 00 32 00 64 AD FA" style="font-family: var(--font-mono); font-size:11px;"></td>
+      <td style="text-align: center;"><button class="btn-remove-row">🗑️</button></td>
+    `;
+    pollingCommandsTable.appendChild(tr);
+    
+    tr.querySelector('.btn-remove-row').addEventListener('click', () => {
+      tr.remove();
+      renumberPollingRows();
+    });
+  });
+}
+
+// Generated Modbus hex calculator
+function updateGeneratedModbusHex() {
+  if (!cellModbusIdDec || !cellModbusFunc || !cellModbusAddrDec || !cellModbusQty || !modbusGenHexDisplay) return;
+  const devIdStr = cellModbusIdDec.value.trim();
+  const funcCodeStr = cellModbusFunc.value;
+  const startAddrStr = cellModbusAddrDec.value.trim();
+  const qtyStr = cellModbusQty.value.trim();
+  
+  if (!devIdStr || !startAddrStr || !qtyStr) {
+    modbusGenHexDisplay.textContent = '------';
+    return;
+  }
+  
+  try {
+    const devId = parseInt(devIdStr);
+    const funcCode = parseInt(funcCodeStr, 16);
+    const startAddr = parseInt(startAddrStr);
+    const qty = parseInt(qtyStr);
+    
+    if (isNaN(devId) || isNaN(funcCode) || isNaN(startAddr) || isNaN(qty)) {
+      modbusGenHexDisplay.textContent = 'Invalid values';
+      return;
+    }
+    
+    const buffer = new Uint8Array(6);
+    buffer[0] = devId & 0xFF;
+    buffer[1] = funcCode & 0xFF;
+    buffer[2] = (startAddr >>> 8) & 0xFF;
+    buffer[3] = startAddr & 0xFF;
+    buffer[4] = (qty >>> 8) & 0xFF;
+    buffer[5] = qty & 0xFF;
+    
+    const crc = calculateCrc16(buffer);
+    
+    const fullFrame = new Uint8Array(8);
+    fullFrame.set(buffer);
+    fullFrame[6] = crc & 0xFF;
+    fullFrame[7] = (crc >>> 8) & 0xFF;
+    
+    let hexStr = '';
+    fullFrame.forEach(b => {
+      let s = b.toString(16).toUpperCase();
+      if (s.length < 2) s = '0' + s;
+      hexStr += s + ' ';
+    });
+    
+    modbusGenHexDisplay.textContent = hexStr.trim();
+  } catch (err) {
+    modbusGenHexDisplay.textContent = 'Error';
+  }
+}
+
+// DEC/HEX syncer inputs
+if (cellModbusIdHex) {
+  cellModbusIdHex.addEventListener('input', () => {
+    let val = cellModbusIdHex.value.trim();
+    if (val.toLowerCase().startsWith('0x')) val = val.substring(2);
+    const dec = parseInt(val, 16);
+    if (!isNaN(dec)) {
+      cellModbusIdDec.value = dec;
+      updateGeneratedModbusHex();
+    }
+  });
+}
+if (cellModbusIdDec) {
+  cellModbusIdDec.addEventListener('input', () => {
+    const dec = parseInt(cellModbusIdDec.value.trim());
+    if (!isNaN(dec)) {
+      let hex = dec.toString(16).toUpperCase();
+      if (hex.length < 2) hex = '0' + hex;
+      cellModbusIdHex.value = '0x' + hex;
+      updateGeneratedModbusHex();
+    }
+  });
+}
+if (cellModbusAddrHex) {
+  cellModbusAddrHex.addEventListener('input', () => {
+    let val = cellModbusAddrHex.value.trim();
+    if (val.toLowerCase().startsWith('0x')) val = val.substring(2);
+    const dec = parseInt(val, 16);
+    if (!isNaN(dec)) {
+      cellModbusAddrDec.value = dec;
+      updateGeneratedModbusHex();
+    }
+  });
+}
+if (cellModbusAddrDec) {
+  cellModbusAddrDec.addEventListener('input', () => {
+    const dec = parseInt(cellModbusAddrDec.value.trim());
+    if (!isNaN(dec)) {
+      let hex = dec.toString(16).toUpperCase();
+      while (hex.length < 4) hex = '0' + hex;
+      cellModbusAddrHex.value = '0x' + hex;
+      updateGeneratedModbusHex();
+    }
+  });
+}
+if (cellModbusFunc) cellModbusFunc.addEventListener('change', updateGeneratedModbusHex);
+if (cellModbusQty) cellModbusQty.addEventListener('input', updateGeneratedModbusHex);
+
+// Action triggers for DTU automation WS actions
+if (btnCellConnect) btnCellConnect.addEventListener('click', connectCellularDTU);
+
+if (btnCellReadAll) {
+  btnCellReadAll.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellApplyMode) {
+  btnCellApplyMode.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const mode = document.querySelector('input[name="cell-work-mode"]:checked').value;
+      const ip = cellBrokerIp.value;
+      const port = cellBrokerPort.value;
+      const cid = cellBrokerCid.value;
+      const user = cellBrokerUser.value;
+      const pwd = cellBrokerPwd.value;
+      cellSocket.send(JSON.stringify({ action: 'apply_work_mode', mode, ip, port, cid, user, pwd }));
+    }
+  });
+}
+
+if (btnCellReloadUart) {
+  btnCellReloadUart.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellReloadSubs) {
+  btnCellReloadSubs.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellReloadPubs) {
+  btnCellReloadPubs.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellReloadMqttcon) {
+  btnCellReloadMqttcon.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellReloadPoll) {
+  btnCellReloadPoll.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellApplyUart) {
+  btnCellApplyUart.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const baud = parseInt(cellDtuBaud.value);
+      const stop = cellDtuStop.value;
+      const data = parseInt(cellDtuData.value);
+      const parity = cellDtuParity.value === 'None' ? 'NONE' : cellDtuParity.value.toUpperCase();
+      cellSocket.send(JSON.stringify({ action: 'apply_uart', baud, stop, data, parity }));
+    }
+  });
+}
+
+if (btnCellApplySubs) {
+  btnCellApplySubs.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const subs = [];
+      for (let i = 0; i < 4; i++) {
+        subs.push({
+          en: document.getElementById(`cell-sub-en-${i}`).checked,
+          topic: document.getElementById(`cell-sub-t-${i}`).value.trim(),
+          qos: parseInt(document.getElementById(`cell-sub-q-${i}`).value)
+        });
+      }
+      cellSocket.send(JSON.stringify({ action: 'apply_subs', subs }));
+    }
+  });
+}
+
+if (btnCellApplyPubs) {
+  btnCellApplyPubs.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const pubs = [];
+      for (let i = 0; i < 4; i++) {
+        pubs.push({
+          en: document.getElementById(`cell-pub-en-${i}`).checked,
+          topic: document.getElementById(`cell-pub-t-${i}`).value.trim(),
+          qos: parseInt(document.getElementById(`cell-pub-q-${i}`).value),
+          retain: document.getElementById(`cell-pub-r-${i}`).checked
+        });
+      }
+      cellSocket.send(JSON.stringify({ action: 'apply_pubs', pubs }));
+    }
+  });
+}
+
+if (btnCellApplyWill) {
+  btnCellApplyWill.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const en = cellWillEn.checked;
+      const topic = cellWillTopic.value.trim();
+      const msg = cellWillMsg.value;
+      const qos = parseInt(cellWillQos.value);
+      const retain = cellWillRetain.checked;
+      cellSocket.send(JSON.stringify({ action: 'apply_will', en, topic, msg, qos, retain }));
+    }
+  });
+}
+
+if (btnCellApplyMqttcon) {
+  btnCellApplyMqttcon.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const clean_session = cellCleanSession.checked;
+      const keep_alive = parseInt(cellKeepAlive.value);
+      cellSocket.send(JSON.stringify({ action: 'apply_mqttcon', clean_session, keep_alive }));
+    }
+  });
+}
+
+if (btnCellPubModbus) {
+  btnCellPubModbus.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const hexStr = modbusGenHexDisplay.textContent.trim();
+      if (hexStr && hexStr !== '------' && hexStr !== 'Error') {
+        cellSocket.send(JSON.stringify({ action: 'write', data: hexStr, hex: true }));
+        const timePrefix = chkCellTimeTag && chkCellTimeTag.checked ? getFormattedTime() + ' ' : '';
+        const line = document.createElement('div');
+        line.className = 'console-line send-msg';
+        line.textContent = `${timePrefix}>> ${hexStr}`;
+        cellConsoleBody.appendChild(line);
+        const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+        if (crcEnabled) {
+          cellRecordSentFrame(hexStr);
+        }
+        cellConsoleHistory.push({ type: 'send', data: `>> ${hexStr}`, timestamp: getFormattedTime() });
+        saveCellConsoleHistory();
+        
+        if (cellConsoleBody.children.length > 500) cellConsoleBody.removeChild(cellConsoleBody.firstChild);
+        if (chkCellAutoscroll && chkCellAutoscroll.checked) cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+      }
+    }
+  });
+}
+
+if (btnCellApplyPoll) {
+  btnCellApplyPoll.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      const task_mode = document.querySelector('input[name="cell-task-mode"]:checked').value;
+      const cycle = parseInt(cellTaskCycle.value);
+      const interval = parseInt(cellTaskInterval.value);
+      const enable_identifier = cellTaskDistEn.checked;
+      const identifier_format = cellTaskDistFmt.value;
+      const list = getPollingListFromUI();
+      cellSocket.send(JSON.stringify({ action: 'apply_polling', task_mode, cycle, interval, enable_identifier, identifier_format, list }));
+    }
+  });
+}
+
+if (btnCellCheckNet) {
+  btnCellCheckNet.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'check_network' }));
+    }
+  });
+}
+
+if (btnCellConsoleSend) {
+  btnCellConsoleSend.addEventListener('click', () => {
+    let text = cellConsoleSendInput.value.trim();
+    if (!text) return;
+    
+    // Append selected line ending
+    const ending = cellLineEndingSelect ? cellLineEndingSelect.value : 'crlf';
+    let displayText = text;
+    if (ending === 'lf') {
+      text += '\n';
+      displayText += '\\n';
+    } else if (ending === 'cr') {
+      text += '\r';
+      displayText += '\\r';
+    } else if (ending === 'crlf') {
+      text += '\r\n';
+      displayText += '\\r\\n';
+    }
+    
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      cellSocket.send(JSON.stringify({ action: 'write', data: text, hex: false }));
+      const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+      if (crcEnabled) {
+        // Record sent frame for modbus response correlation
+        const clean = text.replace(/\s+/g, '');
+        if (/^[0-9A-Fa-f]+$/.test(clean) && clean.length % 2 === 0) {
+          cellRecordSentFrame(text);
+        } else {
+          cellRecordSentFrame(stringToHex(text));
+        }
+      }
+      addLogToConsole(cellConsoleBody, `>> ${displayText}`, 'send', chkCellTimeTag.checked);
+      cellConsoleSendInput.value = '';
+    }
+  });
+}
+
+if (cellConsoleSendInput) {
+  cellConsoleSendInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      btnCellConsoleSend.click();
+    }
+  });
+}
+
+if (btnClearCellConsole) {
+  btnClearCellConsole.addEventListener('click', () => {
+    cellConsoleBody.innerHTML = '';
+    cellConsoleHistory = [];
+    localStorage.removeItem('cell_console_history');
+  });
+}
+
+// Rebuild cell console lines when HEX mode or CRC check changes
+function rebuildCellConsole() {
+  cellConsoleBody.innerHTML = '';
+  const hexMode = chkCellHexMode ? chkCellHexMode.checked : false;
+  const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+  const showTime = chkCellTimeTag ? chkCellTimeTag.checked : true;
+
+  cellConsoleHistory.forEach(item => {
+    const timePrefix = showTime ? (item.timestamp || getFormattedTime()) + ' ' : '';
+    const line = document.createElement('div');
+    line.className = 'console-line';
+
+    if (item.type === 'recv') {
+      line.classList.add('recv-msg');
+      let displayData = item.data;
+      if (hexMode) {
+        displayData = stringToHex(item.data);
+      } else {
+        const cleanHex = item.data.replace(/\s+/g, '');
+        if (/^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
+          displayData = formatHexWithSpaces(cleanHex);
+        }
+      }
+      line.textContent = `${timePrefix}<< ${displayData}`;
+      line.dataset.rawData = item.data;
+      cellConsoleBody.appendChild(line);
+    } else if (item.type === 'send') {
+      line.classList.add('send-msg');
+      line.textContent = `${timePrefix}${item.data}`;
+      cellConsoleBody.appendChild(line);
+    } else if (item.type === 'system' || item.type === 'error') {
+      line.classList.add(item.type === 'error' ? 'error-msg' : 'system-msg');
+      line.textContent = `${timePrefix}${item.text}`;
+      cellConsoleBody.appendChild(line);
+
+      if (item.crcBadge && crcEnabled) {
+        const badge = document.createElement('span');
+        badge.className = `crc-badge ${item.crcBadge === 'OK' ? 'crc-ok' : 'crc-err'}`;
+        badge.textContent = `CRC: ${item.crcBadge}`;
+        line.appendChild(badge);
+      }
+    }
+  });
+
+  if (chkCellAutoscroll && chkCellAutoscroll.checked) {
+    cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+  }
+}
+
+if (chkCellHexMode) {
+  chkCellHexMode.addEventListener('change', () => {
+    saveCellSettings();
+    rebuildCellConsole();
+  });
+}
+if (chkCellModbusCrc) {
+  chkCellModbusCrc.addEventListener('change', () => {
+    saveCellSettings();
+    rebuildCellConsole();
+  });
+}
+if (chkCellTimeTag) {
+  chkCellTimeTag.addEventListener('change', () => {
+    saveCellSettings();
+    rebuildCellConsole();
+  });
+}
+if (chkCellAutoscroll) {
+  chkCellAutoscroll.addEventListener('change', () => {
+    saveCellSettings();
+  });
+}
+
+[cellBaudSelect, cellDataBitsSelect, cellStopBitsSelect, cellParitySelect, cellBrokerIp, cellBrokerPort, cellBrokerCid, cellBrokerUser, cellBrokerPwd, cellDtuBaud, cellDtuData, cellDtuStop, cellDtuParity, cellWillEn, cellWillTopic, cellWillMsg, cellWillQos, cellWillRetain, cellCleanSession, cellKeepAlive, cellModbusIdHex, cellModbusIdDec, cellModbusFunc, cellModbusAddrHex, cellModbusAddrDec, cellModbusQty, cellTaskCycle, cellTaskInterval, cellTaskDistEn, cellTaskDistFmt, cellLineEndingSelect].forEach(el => {
+  if (el) el.addEventListener('change', saveCellSettings);
+});
+
+// Bind slot list inputs
+for (let i = 0; i < 4; i++) {
+  const csen = document.getElementById(`cell-sub-en-${i}`);
+  const cst = document.getElementById(`cell-sub-t-${i}`);
+  const csq = document.getElementById(`cell-sub-q-${i}`);
+  const cpen = document.getElementById(`cell-pub-en-${i}`);
+  const cpt = document.getElementById(`cell-pub-t-${i}`);
+  const cpq = document.getElementById(`cell-pub-q-${i}`);
+  const cpret = document.getElementById(`cell-pub-r-${i}`);
+  
+  if (csen) csen.addEventListener('change', saveCellSettings);
+  if (cst) cst.addEventListener('change', saveCellSettings);
+  if (csq) csq.addEventListener('change', saveCellSettings);
+  if (cpen) cpen.addEventListener('change', saveCellSettings);
+  if (cpt) cpt.addEventListener('change', saveCellSettings);
+  if (cpq) cpq.addEventListener('change', saveCellSettings);
+  if (cpret) cpret.addEventListener('change', saveCellSettings);
+}
+
+
+// ==========================================
+// PERFORMANCE TRACKER & CANVAS PLOTTER
+// ==========================================
+class PerformanceTracker {
+  constructor() {
+    this.cellularMsgs = []; // list of { hex, time }
+    this.matchedPoints = []; // list of { timestamp, delay, legend }
+    this.metrics = {
+      success: 0,
+      corrupted: 0,
+      pending: 0,
+      avgLatency: 0
+    };
+  }
+  
+  registerCellularMsg(pktBytes) {
+    let hexStr = '';
+    pktBytes.forEach(b => {
+      let s = b.toString(16).toUpperCase();
+      if (s.length < 2) s = '0' + s;
+      hexStr += s;
+    });
+    
+    this.cellularMsgs.push({
+      hex: hexStr,
+      time: Date.now()
+    });
+    
+    if (this.cellularMsgs.length > 100) this.cellularMsgs.shift();
+    
+    this.metrics.pending++;
+    this.updateMetricsUI();
+    this.checkPendingTimeout();
+  }
+  
+  registerInternetMsg(payloadStr) {
+    // payloadStr is latin1-decoded from backend: each charCode == original byte value.
+    // Convert to a compact uppercase hex string so we can match against cellular hex.
+    const cleanPayloadHex = stringToHex(payloadStr).replace(/\s+/g, '').toUpperCase();
+    const now = Date.now();
+    
+    for (let i = this.cellularMsgs.length - 1; i >= 0; i--) {
+      const cellMsg = this.cellularMsgs[i];
+      if (cleanPayloadHex.includes(cellMsg.hex)) {
+        const delay = (now - cellMsg.time) / 1000;
+        
+        let legend = 'Success';
+        if (cleanPayloadHex.startsWith(cellMsg.hex)) {
+          legend = 'Corrupted';
+          this.metrics.corrupted++;
+        } else {
+          this.metrics.success++;
+        }
+        
+        if (this.metrics.pending > 0) this.metrics.pending--;
+        
+        const dateObj = new Date(cellMsg.time);
+        const tsStr = `${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}:${String(dateObj.getSeconds()).padStart(2, '0')}`;
+        
+        this.matchedPoints.push({
+          timestamp: tsStr,
+          delay: Math.max(0.001, delay),
+          legend: legend,
+          cellTime: cellMsg.time
+        });
+        
+        if (this.matchedPoints.length > 50) this.matchedPoints.shift();
+        this.cellularMsgs.splice(i, 1);
+        
+        this.recalculateAvgLatency();
+        this.updateMetricsUI();
+        
+        if (panePerf && panePerf.classList.contains('active')) {
+          drawPerformanceChart();
+        }
+        break;
+      }
+    }
+  }
+  
+  checkPendingTimeout() {
+    const now = Date.now();
+    let updated = false;
+    for (let i = this.cellularMsgs.length - 1; i >= 0; i--) {
+      const cellMsg = this.cellularMsgs[i];
+      if (now - cellMsg.time > 5000) {
+        this.cellularMsgs.splice(i, 1);
+        if (this.metrics.pending > 0) this.metrics.pending--;
+        
+        const dateObj = new Date(cellMsg.time);
+        const tsStr = `${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}:${String(dateObj.getSeconds()).padStart(2, '0')}`;
+        
+        this.matchedPoints.push({
+          timestamp: tsStr,
+          delay: 5.0,
+          legend: 'Fail',
+          cellTime: cellMsg.time
+        });
+        
+        if (this.matchedPoints.length > 50) this.matchedPoints.shift();
+        updated = true;
+      }
+    }
+    if (updated) {
+      this.updateMetricsUI();
+      if (panePerf && panePerf.classList.contains('active')) {
+        drawPerformanceChart();
+      }
+    }
+  }
+  
+  recalculateAvgLatency() {
+    const successes = this.matchedPoints.filter(p => p.legend === 'Success' || p.legend === 'Corrupted');
+    if (successes.length === 0) {
+      this.metrics.avgLatency = 0;
+      return;
+    }
+    const sum = successes.reduce((acc, p) => acc + p.delay, 0);
+    this.metrics.avgLatency = (sum / successes.length) * 1000;
+  }
+  
+  updateMetricsUI() {
+    const successVal = document.getElementById('perf-val-success');
+    const corruptedVal = document.getElementById('perf-val-corrupted');
+    const pendingVal = document.getElementById('perf-val-pending');
+    const latencyVal = document.getElementById('perf-val-latency');
+    
+    if (successVal) successVal.innerHTML = `${this.metrics.success}<span class="perf-unit">pkts</span>`;
+    if (corruptedVal) corruptedVal.innerHTML = `${this.metrics.corrupted}<span class="perf-unit">pkts</span>`;
+    if (pendingVal) pendingVal.innerHTML = `${this.metrics.pending}<span class="perf-unit">pkts</span>`;
+    if (latencyVal) latencyVal.innerHTML = `${this.metrics.avgLatency.toFixed(1)}<span class="perf-unit">ms</span>`;
+  }
+}
+
+const performanceTracker = new PerformanceTracker();
+setInterval(() => {
+  performanceTracker.checkPendingTimeout();
+}, 1000);
+
+// Canvas plotting function
+function drawPerformanceChart() {
+  const canvas = document.getElementById('perf-latency-canvas');
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  
+  const width = rect.width;
+  const height = rect.height;
+  
+  ctx.clearRect(0, 0, width, height);
+  
+  ctx.strokeStyle = '#222730';
+  ctx.lineWidth = 1;
+  
+  const paddingLeft = 60;
+  const paddingRight = 20;
+  const paddingTop = 40;
+  const paddingBottom = 40;
+  
+  const chartWidth = width - paddingLeft - paddingRight;
+  const chartHeight = height - paddingTop - paddingBottom;
+  
+  const ticks = [1, 10, 50, 200, 500, 1000];
+  ctx.font = '10px Consolas, monospace';
+  ctx.fillStyle = '#657388';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  
+  function getValY(msVal) {
+    const minLog = Math.log10(1);
+    const maxLog = Math.log10(1500);
+    const logVal = Math.log10(Math.max(1, msVal));
+    const percent = (logVal - minLog) / (maxLog - minLog);
+    return paddingTop + chartHeight * (1 - percent);
+  }
+  
+  ticks.forEach(t => {
+    const y = getValY(t);
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, y);
+    ctx.lineTo(width - paddingRight, y);
+    ctx.stroke();
+    
+    ctx.fillText(`${t}ms`, paddingLeft - 8, y);
+  });
+  
+  ctx.strokeStyle = '#38444d';
+  ctx.beginPath();
+  ctx.moveTo(paddingLeft, height - paddingBottom);
+  ctx.lineTo(width - paddingRight, height - paddingBottom);
+  ctx.stroke();
+  
+  const pts = performanceTracker.matchedPoints;
+  if (pts.length === 0) {
+    ctx.fillStyle = '#657388';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No matched packets to analyze performance latency.', width / 2, height / 2);
+    return;
+  }
+  
+  const barSpacing = chartWidth / 50;
+  const barWidth = Math.max(2, barSpacing * 0.7);
+  
+  pts.forEach((pt, i) => {
+    const x = paddingLeft + i * barSpacing + (barSpacing - barWidth) / 2;
+    const ms = pt.delay * 1000;
+    const y = getValY(ms);
+    const bottomY = height - paddingBottom;
+    
+    if (pt.legend === 'Success') ctx.fillStyle = '#2ecc71';
+    else if (pt.legend === 'Corrupted') ctx.fillStyle = '#f39c12';
+    else ctx.fillStyle = '#e74c3c';
+    
+    ctx.fillRect(x, y, barWidth, bottomY - y);
+    
+    if (i % 5 === 0) {
+      ctx.fillStyle = '#657388';
+      ctx.textAlign = 'center';
+      ctx.fillText(i + 1, x + barWidth / 2, bottomY + 12);
+    }
+  });
+  
+  ctx.textAlign = 'left';
+  const legendItems = [
+    { label: 'Success', color: '#2ecc71' },
+    { label: 'Corrupted Header', color: '#f39c12' },
+    { label: 'Fail / Pending Timeout', color: '#e74c3c' }
+  ];
+  
+  let currentX = paddingLeft;
+  legendItems.forEach(item => {
+    ctx.fillStyle = item.color;
+    ctx.fillRect(currentX, 15, 12, 8);
+    
+    ctx.fillStyle = '#657388';
+    ctx.fillText(item.label, currentX + 16, 20);
+    currentX += 130;
+  });
+}
+
+function calculateCrc16(buffer) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < buffer.length; i++) {
+    crc ^= buffer[i];
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x0001) !== 0) {
+        crc = (crc >>> 1) ^ 0xA001;
+      } else {
+        crc = crc >>> 1;
+      }
+    }
+  }
+  return crc;
+}
+
+function findModbusPackets(rawBytes) {
+  const packets = [];
+  if (!rawBytes || rawBytes.length < 4) return packets;
+  
+  let offset = 0;
+  while (offset + 4 <= rawBytes.length) {
+    const fc = rawBytes[offset + 1];
+    if (fc >= 1 && fc <= 4) {
+      if (offset + 2 < rawBytes.length) {
+        const byteCount = rawBytes[offset + 2];
+        const length = 3 + byteCount + 2;
+        if (offset + length <= rawBytes.length) {
+          const pkt = rawBytes.slice(offset, offset + length);
+          const calcCrc = calculateCrc16(pkt.slice(0, -2));
+          const recLow = pkt[pkt.length - 2];
+          const recHigh = pkt[pkt.length - 1];
+          const recCrc = recLow | (recHigh << 8);
+          
+          if (calcCrc === recCrc) {
+            packets.push(pkt);
+            offset += length;
+            continue;
+          }
+        }
+      }
+    }
+    offset++;
+  }
+  return packets;
+}
+
+// Initialize settings on startup
+loadInetSettings();
+loadCellSettings();
+loadInetConsoleHistory();
+loadCellConsoleHistory();
+updateGeneratedModbusHex();
+
+
+window.addEventListener('resize', () => {
+  if (panePerf && panePerf.classList.contains('active')) {
+    drawPerformanceChart();
+  }
+});
+

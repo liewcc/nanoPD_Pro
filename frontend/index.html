@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nanoPD Pro - Workspace</title>
+  <!-- Load Google Fonts Roboto, Roboto Mono, Outfit, and Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;1,300;1,400;1,500;1,700&family=Roboto+Mono:ital,wght@0,300;0,400;0,500;0,700;1,300;1,400;1,500;1,700&family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="assets/logo.png">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    window.onerror = function(message, source, lineno, colno, error) {
+      const errText = `${message} at ${source}:${lineno}:${colno}`;
+      if (window.electronAPI && window.electronAPI.logRendererError) {
+        window.electronAPI.logRendererError(errText);
+      }
+    };
+    window.addEventListener('unhandledrejection', function(event) {
+      const errText = `Unhandled promise rejection: ${event.reason}`;
+      if (window.electronAPI && window.electronAPI.logRendererError) {
+        window.electronAPI.logRendererError(errText);
+      }
+    });
+  </script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Left Navigation Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-sparkle">✦</span>
+        <h1 class="brand-name">nanoPD <span>Pro</span></h1>
+      </div>
+      
+      <nav class="sidebar-menu">
+        <a href="#" class="menu-item active" id="nav-dashboard">
+          <span class="menu-icon">📊</span> COM Tool
+        </a>
+        <a href="#" class="menu-item" id="nav-mqtt">
+          <span class="menu-icon">📡</span> MQTT Tool
+        </a>
+        <a href="#" class="menu-item" id="nav-system-config">
+          <span class="menu-icon">⚙️</span> System Config
+        </a>
+      </nav>
+
+    </aside>
+
+    <!-- Main Workspace Content Area -->
+    <main class="main-content">
+
+
+      <!-- COM Tool View (ComfyUI Listener Style Grid Layout) -->
+      <section class="view-pane active" id="view-dashboard">
+        <!-- COM Port Status Card (Always visible, GemiPersona Setup Style) -->
+        <div id="com-port-card" class="com-port-card glass">
+          <!-- Left part: COM port badges (updated dynamically by renderer.js) -->
+          <div class="com-port-left" id="com-port-left"></div>
+
+          <!-- Right part: Backend Port and Status Indicators -->
+          <div class="com-port-right" id="com-port-right">
+            <span id="mqtt-status" class="job-status-badge conn-badge-disconnected mqtt-status" style="cursor: default;">MQTT</span>
+            <span class="job-status-badge" style="background-color: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); letter-spacing: 0.5px;">PORT: <span id="display-port" class="display-port">---</span></span>
+            <span id="electron-status" class="job-status-badge conn-badge-connected electron-status" style="cursor: default;">ELECTRON</span>
+            <span id="backend-status" class="job-status-badge conn-badge-disconnected backend-status" style="cursor: default;">FASTAPI</span>
+          </div>
+        </div>
+
+        <!-- COM Port Tab Bar -->
+        <div id="com-tool-tab-bar" class="sub-tab-bar glass" style="display: none; margin-top: -10px; margin-bottom: 16px;"></div>
+
+        <!-- COM Tool Workspaces Container -->
+        <div id="com-tool-workspaces-container" style="flex-grow: 1; display: flex; flex-direction: column; min-height: 0;">
+          <div id="com-empty-placeholder" class="glass" style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex-grow: 1; border: 1px dashed var(--border); border-radius: var(--radius); padding: 40px; color: var(--text-muted); text-align: center;">
+            <div style="font-size: 48px; margin-bottom: 16px;">🔌</div>
+            <div style="font-size: 16px; font-weight: 600; color: var(--text-main); margin-bottom: 8px;">No Serial Devices Connected</div>
+            <div style="font-size: 13px; max-width: 320px; line-height: 1.5;">Plug in a USB Serial device (such as an Arduino, ESP32, or CH340 converter) to open a terminal tab.</div>
+          </div>
+        </div>
+
+        <!-- Template for Dynamic COM Tool Workspaces -->
+        <template id="com-workspace-template">
+          <div class="com-workspace-wrapper">
+            <div class="com-tool-workspace" style="width: 100%; margin-top: 0;">
+              <!-- Left Settings Panel (30%) -->
+              <div class="com-tool-panel-left">
+                <!-- Serial Port Settings -->
+                <div class="panel-section glass com-left-card">
+                  <div class="panel-section-title">🔌 Serial Parameters</div>
+                  
+                  <!-- Row 1: COM Port and Baud Rate inline -->
+                  <div class="settings-row-flex">
+                    <div class="setting-row flex-item">
+                      <label>COM Port</label>
+                      <select class="form-select com-port-select">
+                        <option value="">No Active Ports</option>
+                      </select>
+                    </div>
+                    <div class="setting-row flex-item">
+                      <label>Baud Rate</label>
+                      <select class="form-select baud-rate-select">
+                        <option value="9600">9600</option>
+                        <option value="19200">19200</option>
+                        <option value="38400">38400</option>
+                        <option value="57600">57600</option>
+                        <option value="115200" selected>115200</option>
+                        <option value="230400">230400</option>
+                        <option value="460800">460800</option>
+                        <option value="921600">921600</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- Row 2: Data Bits, Stop Bits, and Parity inline -->
+                  <div class="settings-row-flex">
+                    <div class="setting-row flex-item">
+                      <label>Data Bits</label>
+                      <select class="form-select data-bits-select">
+                        <option value="8" selected>8</option>
+                        <option value="7">7</option>
+                        <option value="6">6</option>
+                        <option value="5">5</option>
+                      </select>
+                    </div>
+                    <div class="setting-row flex-item">
+                      <label>Stop Bits</label>
+                      <select class="form-select stop-bits-select">
+                        <option value="1" selected>1</option>
+                        <option value="1.5">1.5</option>
+                        <option value="2">2</option>
+                      </select>
+                    </div>
+                    <div class="setting-row flex-item">
+                      <label>Parity</label>
+                      <select class="form-select parity-select">
+                        <option value="N" selected>None</option>
+                        <option value="E">Even</option>
+                        <option value="O">Odd</option>
+                        <option value="M">Mark</option>
+                        <option value="S">Space</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button class="btn btn-primary btn-serial-connect" style="margin-top: 6px;">Connect Port</button>
+                </div>
+
+                <!-- Input & Send Control -->
+                <div class="panel-section input-section glass com-left-card">
+                  <div class="panel-section-title">📤 Data Transmission</div>
+                  <textarea class="form-textarea serial-send-input"></textarea>
+                  
+                  <div class="send-options-row">
+                    <div class="setting-row inline-row">
+                      <label>Line Ending</label>
+                      <select class="form-select inline-select line-ending-select">
+                        <option value="none" selected>None</option>
+                        <option value="lf">LF (\n)</option>
+                        <option value="cr">CR (\r)</option>
+                        <option value="crlf">CRLF (\r\n)</option>
+                      </select>
+                    </div>
+                    
+                    <div class="checkbox-row">
+                      <label class="switch-mini">
+                        <input type="checkbox" class="chk-send-hex">
+                        <span class="slider-mini"></span>
+                      </label>
+                      <span class="switch-lbl">HEX Send</span>
+                    </div>
+                  </div>
+                  
+                  <button class="btn btn-secondary btn-serial-send" style="margin-top: 12px;" disabled>Send Data</button>
+                </div>
+              </div>
+
+              <!-- Right Console Card (70%) -->
+              <div class="com-tool-panel-right glass">
+                <div class="console-header">
+                  <div class="console-title">🖥️ Console Window</div>
+                  <div class="console-actions">
+                    <div class="checkbox-row" style="margin-right: 12px;">
+                      <label class="switch-mini">
+                        <input type="checkbox" class="chk-time-tag">
+                        <span class="slider-mini"></span>
+                      </label>
+                      <span class="switch-lbl">Time Tag</span>
+                    </div>
+                    <div class="checkbox-row" style="margin-right: 12px;">
+                      <label class="switch-mini">
+                        <input type="checkbox" class="chk-modbus-crc">
+                        <span class="slider-mini"></span>
+                      </label>
+                      <span class="switch-lbl">CRC Check</span>
+                    </div>
+                    <div class="checkbox-row" style="margin-right: 12px;">
+                      <label class="switch-mini">
+                        <input type="checkbox" class="chk-recv-hex">
+                        <span class="slider-mini"></span>
+                      </label>
+                      <span class="switch-lbl">HEX Mode</span>
+                    </div>
+                    <div class="checkbox-row" style="margin-right: 16px;">
+                      <label class="switch-mini">
+                        <input type="checkbox" class="chk-autoscroll" checked>
+                        <span class="slider-mini"></span>
+                      </label>
+                      <span class="switch-lbl">Autoscroll</span>
+                    </div>
+                    <button class="btn-clear btn-clear-console">Clear</button>
+                  </div>
+                </div>
+                <div class="console-body serial-console-body"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </section>
+
+
+
+      <!-- MQTT Tool View -->
+      <section class="view-pane" id="view-mqtt">
+        <!-- COM Port Status Card (Always visible, GemiPersona Setup Style) -->
+        <div class="com-port-card glass">
+          <!-- Left part: COM port badges (updated dynamically by renderer.js) -->
+          <div class="com-port-left"></div>
+
+          <!-- Right part: Backend Port and Status Indicators -->
+          <div class="com-port-right">
+            <span class="job-status-badge conn-badge-disconnected mqtt-status" style="cursor: default;">MQTT</span>
+            <span class="job-status-badge" style="background-color: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); letter-spacing: 0.5px;">PORT: <span class="display-port">---</span></span>
+            <span class="job-status-badge conn-badge-connected electron-status" style="cursor: default;">ELECTRON</span>
+            <span class="job-status-badge conn-badge-disconnected backend-status" style="cursor: default;">FASTAPI</span>
+          </div>
+        </div>
+
+        <!-- Sub Tab Bar -->
+        <div class="sub-tab-bar glass">
+          <button class="sub-tab-btn active" id="sub-tab-btn-internet">🌐 Internet MQTT</button>
+          <button class="sub-tab-btn" id="sub-tab-btn-cellular">📶 Cellular MQTT</button>
+          <button class="sub-tab-btn" id="sub-tab-btn-perf">📊 Performance</button>
+        </div>
+
+        <!-- Tab 1: Internet MQTT Pane -->
+        <div class="mqtt-tab-pane active" id="pane-internet">
+          <div class="com-tool-workspace">
+            <!-- Left Config Panel (30%) -->
+            <div class="com-tool-panel-left glass com-left-card-parent">
+              <div class="com-left-card-scroll-body">
+                <!-- Broker Configuration Card -->
+                <div class="panel-section com-left-section">
+                  <div class="panel-section-title">🌐 Broker Configuration</div>
+                  
+                  <div class="setting-row">
+                    <label for="inet-broker-host">Host Address</label>
+                    <input type="text" id="inet-broker-host" class="form-input" value="202.59.9.164">
+                  </div>
+                  
+                  <div class="settings-row-flex">
+                    <div class="setting-row flex-item">
+                      <label for="inet-broker-port">Port</label>
+                      <input type="number" id="inet-broker-port" class="form-input" value="1883" min="1" max="65535">
+                    </div>
+                    <div class="setting-row flex-item" style="flex: 2;">
+                      <label for="inet-broker-cid">Client ID</label>
+                      <input type="text" id="inet-broker-cid" class="form-input" value="nanopd_mqtt_PC_client">
+                    </div>
+                  </div>
+                  
+                  <div class="settings-row-flex">
+                    <div class="setting-row flex-item">
+                      <label for="inet-broker-user">Username</label>
+                      <input type="text" id="inet-broker-user" class="form-input" placeholder="Optional">
+                    </div>
+                    <div class="setting-row flex-item">
+                      <label for="inet-broker-pwd">Password</label>
+                      <input type="password" id="inet-broker-pwd" class="form-input" placeholder="Optional">
+                    </div>
+                  </div>
+                  
+                  <button id="btn-inet-connect" class="btn btn-primary" style="margin-top: 6px;">Connect Broker</button>
+                </div>
+
+                <!-- Subscription Management Card -->
+                <div class="panel-section com-left-section">
+                  <div class="panel-section-title">➕ Subscription Management</div>
+                  
+                  <div class="settings-row-flex">
+                    <div class="setting-row flex-item" style="flex: 2;">
+                      <label for="inet-sub-topic">Topic</label>
+                      <input type="text" id="inet-sub-topic" class="form-input" value="nanopd/dtu/tx">
+                    </div>
+                    <div class="setting-row flex-item">
+                      <label for="inet-sub-qos">QoS</label>
+                      <select id="inet-sub-qos" class="form-select">
+                        <option value="0">0</option>
+                        <option value="1" selected>1</option>
+                        <option value="2">2</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button id="btn-inet-sub" class="btn btn-secondary" style="margin-top: 6px;">Subscribe</button>
+
+                  <!-- Active Subscriptions List -->
+                  <div class="active-subs-container">
+                    <div class="panel-section-title" style="font-size: 11px; margin-top: 8px; color: var(--text-muted);">Active Subscriptions</div>
+                    <ul id="inet-active-subs-list" class="active-subs-list">
+                      <!-- Dynamic Items -->
+                    </ul>
+                  </div>
+                </div>
+
+                <!-- Publish Message Card -->
+                <div class="panel-section com-left-section">
+                  <div class="panel-section-title">📤 Publish Message</div>
+                  
+                  <div class="settings-row-flex">
+                    <div class="setting-row flex-item" style="flex: 2;">
+                      <label for="inet-pub-topic">Topic</label>
+                      <input type="text" id="inet-pub-topic" class="form-input" value="nanopd/pc/tx">
+                    </div>
+                    <div class="setting-row flex-item">
+                      <label for="inet-pub-qos">QoS</label>
+                      <select id="inet-pub-qos" class="form-select">
+                        <option value="0" selected>0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                      </select>
+                    </div>
+                  </div>
+                  
+                  <div class="setting-row">
+                    <label for="inet-pub-payload">Payload</label>
+                    <input type="text" id="inet-pub-payload" class="form-input" value="hello from PC">
+                  </div>
+                  
+                  <button id="btn-inet-pub" class="btn btn-secondary" style="margin-top: 6px;" disabled>Publish</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Console Card (70%) -->
+            <div class="com-tool-panel-right glass">
+              <div class="console-header">
+                <div class="console-title">🖥️ Internet MQTT Log</div>
+                <div class="console-actions">
+                  <div class="checkbox-row" style="margin-right: 12px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-inet-timetag" checked>
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">Time Tag</span>
+                  </div>
+                  <div class="checkbox-row" style="margin-right: 12px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-inet-modbus-crc">
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">CRC Check</span>
+                  </div>
+                  <div class="checkbox-row" style="margin-right: 12px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-inet-hex-mode">
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">HEX Mode</span>
+                  </div>
+                  <div class="checkbox-row" style="margin-right: 16px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-inet-autoscroll" checked>
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">Autoscroll</span>
+                  </div>
+                  <button id="btn-clear-inet-console" class="btn-clear">Clear</button>
+                </div>
+              </div>
+              <div class="console-body" id="inet-console-body"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Cellular MQTT Pane -->
+        <div class="mqtt-tab-pane" id="pane-cellular">
+          <div class="com-tool-workspace">
+            <!-- Left Config Panel (30%) -->
+            <div class="com-tool-panel-left glass com-left-card-parent">
+              <div class="com-left-card-scroll-body">
+              <!-- COM Port Connection -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">🔌 Cellular COM Connection</div>
+                
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-port-select">COM Port</label>
+                    <select id="cell-port-select" class="form-select">
+                      <option value="">No Active Ports</option>
+                    </select>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-baud-select">Baud Rate</label>
+                    <select id="cell-baud-select" class="form-select">
+                      <option value="9600">9600</option>
+                      <option value="19200">19200</option>
+                      <option value="38400">38400</option>
+                      <option value="57600">57600</option>
+                      <option value="115200" selected>115200</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-data-bits-select">Data Bits</label>
+                    <select id="cell-data-bits-select" class="form-select">
+                      <option value="8" selected>8</option>
+                      <option value="7">7</option>
+                      <option value="6">6</option>
+                      <option value="5">5</option>
+                    </select>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-stop-bits-select">Stop Bits</label>
+                    <select id="cell-stop-bits-select" class="form-select">
+                      <option value="1" selected>1</option>
+                      <option value="1.5">1.5</option>
+                      <option value="2">2</option>
+                    </select>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-parity-select">Parity</label>
+                    <select id="cell-parity-select" class="form-select">
+                      <option value="None" selected>None</option>
+                      <option value="Even">Even</option>
+                      <option value="Odd">Odd</option>
+                      <option value="Mark">Mark</option>
+                      <option value="Space">Space</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
+                  <button id="btn-cell-connect" class="btn btn-primary" style="flex: 1;">Connect Port</button>
+                  <button id="btn-cell-read-all" class="btn btn-secondary" style="flex: 1;" disabled>Read All HW</button>
+                </div>
+              </div>
+
+              <!-- Working Mode Card -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">📋 Working Mode & Broker</div>
+                
+                <div class="setting-row">
+                  <label>Work Mode</label>
+                  <div class="radio-tile-group">
+                    <label class="radio-tile-btn"><input type="radio" name="cell-work-mode" value="NET"> NET</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-work-mode" value="HTTP"> HTTP</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-work-mode" value="MQTT" checked> MQTT</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-work-mode" value="ALIYUN"> ALIYUN</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-work-mode" value="ONENET"> ONENET</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-work-mode" value="RNDIS"> RNDIS</label>
+                  </div>
+                </div>
+                
+                <div class="setting-row">
+                  <label for="cell-broker-ip">Broker IP/Host</label>
+                  <input type="text" id="cell-broker-ip" class="form-input" value="202.59.9.164">
+                </div>
+                
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-broker-port">Port</label>
+                    <input type="text" id="cell-broker-port" class="form-input" value="1883">
+                  </div>
+                  <div class="setting-row flex-item" style="flex: 2;">
+                    <label for="cell-broker-cid">Client ID</label>
+                    <input type="text" id="cell-broker-cid" class="form-input" value="nanopd_mqtt_dtu_client">
+                  </div>
+                </div>
+
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-broker-user">Username</label>
+                    <input type="text" id="cell-broker-user" class="form-input" placeholder="Optional">
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-broker-pwd">Password</label>
+                    <input type="password" id="cell-broker-pwd" class="form-input" placeholder="Optional">
+                  </div>
+                </div>
+                
+                <button id="btn-cell-apply-mode" class="btn btn-primary" style="margin-top: 6px;" disabled>Apply Mode & Broker (Reboot)</button>
+              </div>
+
+              <!-- 4G Module UART Configuration -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">⚙️ 4G Module UART Param</div>
+                
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-dtu-baud">Baudrate</label>
+                    <select id="cell-dtu-baud" class="form-select">
+                      <option value="9600">9600</option>
+                      <option value="19200">19200</option>
+                      <option value="38400">38400</option>
+                      <option value="57600">57600</option>
+                      <option value="115200" selected>115200</option>
+                    </select>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-dtu-data">Data Bits</label>
+                    <select id="cell-dtu-data" class="form-select">
+                      <option value="8" selected>8</option>
+                      <option value="7">7</option>
+                      <option value="6">6</option>
+                      <option value="5">5</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-dtu-stop">Stop Bits</label>
+                    <select id="cell-dtu-stop" class="form-select">
+                      <option value="1" selected>1</option>
+                      <option value="1.5">1.5</option>
+                      <option value="2">2</option>
+                    </select>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-dtu-parity">Parity</label>
+                    <select id="cell-dtu-parity" class="form-select">
+                      <option value="None" selected>None</option>
+                      <option value="Even">Even</option>
+                      <option value="Odd">Odd</option>
+                      <option value="Mark">Mark</option>
+                      <option value="Space">Space</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
+                  <button id="btn-cell-reload-uart" class="btn btn-secondary" style="flex: 1;" disabled>Reload</button>
+                  <button id="btn-cell-apply-uart" class="btn btn-primary" style="flex: 1;" disabled>Apply (Reboot)</button>
+                </div>
+              </div>
+
+              <!-- Topic Subscriptions Slots -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">topic subscription slots (1-4)</div>
+                
+                <div class="slot-list-container">
+                  <div class="slot-row header-row">
+                    <span class="slot-col-en">ACT</span>
+                    <span class="slot-col-topic">TOPIC</span>
+                    <span class="slot-col-qos">QOS</span>
+                  </div>
+                  <!-- Slot 1 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-sub-en-0" class="slot-chk" checked>
+                    <input type="text" id="cell-sub-t-0" class="form-input slot-inp" value="nanopd/pc/tx" placeholder="nanopd/dtu/sub1">
+                    <select id="cell-sub-q-0" class="form-select slot-sel"><option value="0" selected>0</option><option value="1">1</option><option value="2">2</option></select>
+                  </div>
+                  <!-- Slot 2 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-sub-en-1" class="slot-chk">
+                    <input type="text" id="cell-sub-t-1" class="form-input slot-inp" placeholder="nanopd/dtu/sub2">
+                    <select id="cell-sub-q-1" class="form-select slot-sel"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+                  </div>
+                  <!-- Slot 3 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-sub-en-2" class="slot-chk">
+                    <input type="text" id="cell-sub-t-2" class="form-input slot-inp" placeholder="nanopd/dtu/sub3">
+                    <select id="cell-sub-q-2" class="form-select slot-sel"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+                  </div>
+                  <!-- Slot 4 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-sub-en-3" class="slot-chk">
+                    <input type="text" id="cell-sub-t-3" class="form-input slot-inp" placeholder="nanopd/dtu/sub4">
+                    <select id="cell-sub-q-3" class="form-select slot-sel"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+                  </div>
+                </div>
+
+                <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
+                  <button id="btn-cell-reload-subs" class="btn btn-secondary" style="flex: 1;" disabled>Reload</button>
+                  <button id="btn-cell-apply-subs" class="btn btn-primary" style="flex: 1;" disabled>Apply</button>
+                </div>
+              </div>
+
+              <!-- Topic Publishing Slots -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">topic publishing slots (1-4)</div>
+                
+                <div class="slot-list-container">
+                  <div class="slot-row header-row">
+                    <span class="slot-col-en">ACT</span>
+                    <span class="slot-col-topic">TOPIC</span>
+                    <span class="slot-col-qos">QOS</span>
+                    <span class="slot-col-ret">RET</span>
+                  </div>
+                  <!-- Slot 1 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-pub-en-0" class="slot-chk" checked>
+                    <input type="text" id="cell-pub-t-0" class="form-input slot-inp" value="nanopd/dtu/tx">
+                    <select id="cell-pub-q-0" class="form-select slot-sel"><option value="0" selected>0</option><option value="1">1</option><option value="2">2</option></select>
+                    <input type="checkbox" id="cell-pub-r-0" class="slot-chk">
+                  </div>
+                  <!-- Slot 2 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-pub-en-1" class="slot-chk">
+                    <input type="text" id="cell-pub-t-1" class="form-input slot-inp">
+                    <select id="cell-pub-q-1" class="form-select slot-sel"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+                    <input type="checkbox" id="cell-pub-r-1" class="slot-chk">
+                  </div>
+                  <!-- Slot 3 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-pub-en-2" class="slot-chk">
+                    <input type="text" id="cell-pub-t-2" class="form-input slot-inp">
+                    <select id="cell-pub-q-2" class="form-select slot-sel"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+                    <input type="checkbox" id="cell-pub-r-2" class="slot-chk">
+                  </div>
+                  <!-- Slot 4 -->
+                  <div class="slot-row">
+                    <input type="checkbox" id="cell-pub-en-3" class="slot-chk">
+                    <input type="text" id="cell-pub-t-3" class="form-input slot-inp">
+                    <select id="cell-pub-q-3" class="form-select slot-sel"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+                    <input type="checkbox" id="cell-pub-r-3" class="slot-chk">
+                  </div>
+                </div>
+
+                <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
+                  <button id="btn-cell-reload-pubs" class="btn btn-secondary" style="flex: 1;" disabled>Reload</button>
+                  <button id="btn-cell-apply-pubs" class="btn btn-primary" style="flex: 1;" disabled>Apply</button>
+                </div>
+              </div>
+
+              <!-- Last Will & Testament LWT -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">📜 Last Will & Testament (LWT)</div>
+                
+                <div class="checkbox-row" style="margin-bottom: 6px;">
+                  <input type="checkbox" id="cell-will-en">
+                  <label for="cell-will-en" style="text-transform:none; cursor:pointer;">Enable LWT Message</label>
+                </div>
+                
+                <div class="setting-row">
+                  <label for="cell-will-topic">Will Topic</label>
+                  <input type="text" id="cell-will-topic" class="form-input" placeholder="e.g., device/status">
+                </div>
+
+                <div class="setting-row">
+                  <label for="cell-will-msg">Will Message</label>
+                  <input type="text" id="cell-will-msg" class="form-input" placeholder="e.g., offline">
+                </div>
+
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-will-qos">Will QoS</label>
+                    <select id="cell-will-qos" class="form-select">
+                      <option value="0" selected>0</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                    </select>
+                  </div>
+                  <div class="checkbox-row flex-item" style="height: 52px; align-items: flex-end; padding-bottom: 6px; margin-left: 12px;">
+                    <input type="checkbox" id="cell-will-retain">
+                    <label for="cell-will-retain" style="text-transform:none; cursor:pointer; margin-left: 6px;">Will Retain</label>
+                  </div>
+                </div>
+
+                <button id="btn-cell-apply-will" class="btn btn-primary" style="margin-top: 6px;" disabled>Apply Will Config</button>
+              </div>
+
+              <!-- Clean Session & Keep Alive parameters -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">⏱ Session Settings</div>
+                
+                <div class="settings-row-flex" style="align-items: center;">
+                  <div class="checkbox-row flex-item" style="height: 38px;">
+                    <input type="checkbox" id="cell-clean-session" checked>
+                    <label for="cell-clean-session" style="text-transform:none; cursor:pointer; margin-left: 6px;">Clean Session</label>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-keep-alive">Keep Alive (sec)</label>
+                    <input type="number" id="cell-keep-alive" class="form-input" value="60" min="0" max="65535">
+                  </div>
+                </div>
+
+                <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
+                  <button id="btn-cell-reload-mqttcon" class="btn btn-secondary" style="flex: 1;" disabled>Reload</button>
+                  <button id="btn-cell-apply-mqttcon" class="btn btn-primary" style="flex: 1;" disabled>Apply</button>
+                </div>
+              </div>
+
+              <!-- Modbus RTU configuration -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">📋 Modbus RTU Command</div>
+                
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-modbus-id-hex">ID (HEX)</label>
+                    <input type="text" id="cell-modbus-id-hex" class="form-input" value="0x2F">
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-modbus-id-dec">ID (DEC)</label>
+                    <input type="text" id="cell-modbus-id-dec" class="form-input" value="47">
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <label for="cell-modbus-func">Function Code</label>
+                  <select id="cell-modbus-func" class="form-select">
+                    <option value="01">01 (Read Coils)</option>
+                    <option value="02">02 (Read Discrete Inputs)</option>
+                    <option value="03" selected>03 (Read Holding Registers)</option>
+                    <option value="04">04 (Read Input Registers)</option>
+                    <option value="05">05 (Write Single Coil)</option>
+                    <option value="06">06 (Write Single Register)</option>
+                    <option value="0F">0F (Write Multiple Coils)</option>
+                    <option value="10">10 (Write Multiple Registers)</option>
+                  </select>
+                </div>
+
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-modbus-addr-hex">ADDR (HEX)</label>
+                    <input type="text" id="cell-modbus-addr-hex" class="form-input" value="0x0032">
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-modbus-addr-dec">ADDR (DEC)</label>
+                    <input type="text" id="cell-modbus-addr-dec" class="form-input" value="50">
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <label for="cell-modbus-qty">Quantity (DEC)</label>
+                  <input type="number" id="cell-modbus-qty" class="form-input" value="100" min="1" max="125">
+                </div>
+
+                <div class="setting-row" style="margin-top: 4px;">
+                  <label>Generated Command (HEX)</label>
+                  <div class="modbus-gen-hex-box" id="modbus-gen-hex-display">------</div>
+                </div>
+
+                <button id="btn-cell-pub-modbus" class="btn btn-secondary" style="margin-top: 6px;" disabled>Publish Modbus Frame</button>
+              </div>
+
+              <!-- Polling Configuration -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">🔄 Polling Configuration</div>
+                
+                <div class="setting-row">
+                  <label>Data Packaging Mode (TASKMD)</label>
+                  <div class="radio-tile-group">
+                    <label class="radio-tile-btn"><input type="radio" name="cell-task-mode" value="OFF" checked> OFF</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-task-mode" value="TRANS"> TRANS</label>
+                    <label class="radio-tile-btn"><input type="radio" name="cell-task-mode" value="MODBUS"> MODBUS</label>
+                  </div>
+                </div>
+
+                <div class="settings-row-flex">
+                  <div class="setting-row flex-item">
+                    <label for="cell-task-cycle">Cycle Time (s)</label>
+                    <input type="number" id="cell-task-cycle" class="form-input" value="1" min="1">
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-task-interval">Interval (ms)</label>
+                    <input type="number" id="cell-task-interval" class="form-input" value="100" min="10">
+                  </div>
+                </div>
+
+                <div class="settings-row-flex" style="align-items: center;">
+                  <div class="checkbox-row flex-item" style="height: 38px;">
+                    <input type="checkbox" id="cell-task-dist-en">
+                    <label for="cell-task-dist-en" style="text-transform:none; cursor:pointer; margin-left: 6px;">Enable ID</label>
+                  </div>
+                  <div class="setting-row flex-item">
+                    <label for="cell-task-dist-fmt">ID Format</label>
+                    <input type="text" id="cell-task-dist-fmt" class="form-input" value="<%d>">
+                  </div>
+                </div>
+
+                <!-- Polling commands editable list table -->
+                <div class="setting-row" style="margin-top: 4px;">
+                  <label>Polling Commands List</label>
+                  <div class="polling-table-container">
+                    <table id="polling-commands-table" class="polling-table">
+                      <thead>
+                        <tr>
+                          <th style="width: 60px;">Index</th>
+                          <th>Modbus Command (HEX)</th>
+                          <th style="width: 50px;">Act</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <!-- Dynamic Rows -->
+                      </tbody>
+                    </table>
+                  </div>
+                  <button id="btn-cell-poll-add" class="btn btn-secondary btn-small" style="margin-top: 6px; width: auto; align-self: flex-start;">➕ Add Row</button>
+                </div>
+
+                <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
+                  <button id="btn-cell-reload-poll" class="btn btn-secondary" style="flex: 1;" disabled>Reload</button>
+                  <button id="btn-cell-apply-poll" class="btn btn-primary" style="flex: 1;" disabled>Apply</button>
+                </div>
+              </div>
+
+              <!-- LTE Network Info display card -->
+              <div class="panel-section com-left-section">
+                <div class="panel-section-title">📡 LTE & Network Info</div>
+                <button id="btn-cell-check-net" class="btn btn-secondary" disabled>Check Network</button>
+                
+                <div class="net-info-grid" style="margin-top: 8px;">
+                  <div class="net-info-item"><span class="net-info-lbl">MODULE</span><span class="net-info-val" id="net-info-module">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">SYSINFO</span><span class="net-info-val" id="net-info-sysinfo">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">CSQ (SIG)</span><span class="net-info-val" id="net-info-csq">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">CLK</span><span class="net-info-val" id="net-info-clk">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">ICCID</span><span class="net-info-val" id="net-info-iccid">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">SN</span><span class="net-info-val" id="net-info-sn">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">IMEI</span><span class="net-info-val" id="net-info-imei">N/A</span></div>
+                  <div class="net-info-item"><span class="net-info-lbl">IMSI</span><span class="net-info-val" id="net-info-imsi">N/A</span></div>
+                </div>
+              </div>
+            
+              </div></div>
+
+            <!-- Right Console Card (70%) -->
+            <div class="com-tool-panel-right glass">
+              <div class="console-header">
+                <div class="console-title">🖥️ Cellular MQTT Console</div>
+                <div class="console-actions">
+                  <div class="checkbox-row" style="margin-right: 12px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-cell-timetag" checked>
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">Time Tag</span>
+                  </div>
+                  <div class="checkbox-row" style="margin-right: 12px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-cell-modbus-crc">
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">CRC Check</span>
+                  </div>
+                  <div class="checkbox-row" style="margin-right: 12px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-cell-hex-mode">
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">HEX Mode</span>
+                  </div>
+                  <div class="checkbox-row" style="margin-right: 16px;">
+                    <label class="switch-mini">
+                      <input type="checkbox" id="chk-cell-autoscroll" checked>
+                      <span class="slider-mini"></span>
+                    </label>
+                    <span class="switch-lbl">Autoscroll</span>
+                  </div>
+                  <button id="btn-clear-cell-console" class="btn-clear">Clear</button>
+                </div>
+              </div>
+              <div class="console-body" id="cell-console-body"></div>
+              
+              <!-- Direct Serial Payload Sender -->
+              <div class="console-footer-sender" style="display: flex; gap: 8px; margin-top: 12px; align-items: center;">
+                <input type="text" id="cell-console-send-input" class="form-input" value="send from DTU" placeholder="Type data payload to publish directly via DTU..." style="flex:1;">
+                <div class="setting-row inline-row" style="margin-bottom: 0;">
+                  <select id="cell-line-ending-select" class="form-select inline-select" style="width: 100px; height: 32px; font-size: 11px; padding: 2px 8px;">
+                    <option value="none">None</option>
+                    <option value="lf">LF (\n)</option>
+                    <option value="cr">CR (\r)</option>
+                    <option value="crlf" selected>CRLF (\r\n)</option>
+                  </select>
+                </div>
+                <button id="btn-cell-console-send" class="btn btn-secondary btn-small" style="width: 80px;" disabled>Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Performance Pane -->
+        <div class="mqtt-tab-pane" id="pane-perf">
+          <div class="perf-workspace" style="display: flex; flex-direction: column; gap: 20px; height: 100%; overflow-y: auto; padding: 4px;">
+            <!-- Metrics Cards Grid -->
+            <div class="perf-metrics-grid">
+              <div class="perf-card glass">
+                <div class="perf-lbl">✅ Sync Success</div>
+                <div class="perf-val" id="perf-val-success">0<span class="perf-unit">pkts</span></div>
+              </div>
+              <div class="perf-card glass">
+                <div class="perf-lbl" style="color:hsl(350, 80%, 55%);">⚠️ Corrupted</div>
+                <div class="perf-val" style="color:hsl(350, 80%, 55%);" id="perf-val-corrupted">0<span class="perf-unit">pkts</span></div>
+              </div>
+              <div class="perf-card glass">
+                <div class="perf-lbl" style="color:hsl(35, 90%, 55%);">⏳ Pending</div>
+                <div class="perf-val" style="color:hsl(35, 90%, 55%);" id="perf-val-pending">0<span class="perf-unit">pkts</span></div>
+              </div>
+              <div class="perf-card glass">
+                <div class="perf-lbl">⏱ Avg Latency</div>
+                <div class="perf-val" id="perf-val-latency">0.0<span class="perf-unit">ms</span></div>
+              </div>
+            </div>
+
+            <!-- Canvas Latency Plot Card -->
+            <div class="perf-chart-card glass" style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 12px; flex-grow: 1; min-height: 420px;">
+              <div class="panel-section-title" style="color: var(--accent); font-size: 14px;">Performance Graph: <b>Sync Delay Trends</b></div>
+              <div style="flex-grow: 1; position: relative;">
+                <canvas id="perf-latency-canvas" style="width: 100%; height: 100%; min-height: 350px; background-color: #0c0c0d; border: 1px solid var(--border); border-radius: 8px;"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- System Config View -->
+      <section class="view-pane" id="view-system-config-pane">
+        <div class="panel" style="height: 100%;">
+          <div class="panel-body" style="justify-content: flex-start; padding: 24px;">
+            <div class="card glass" style="width: 100%; max-width: 600px; padding: 20px; border-radius: 8px;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div>
+                  <div style="color: var(--text-main); font-weight: 500; font-size: 14px;">Hide CLI on next startup</div>
+                  <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">If enabled, the application will run silently in the background on the next restart.</div>
+                </div>
+                <label class="switch" style="flex-shrink: 0;">
+                  <input type="checkbox" id="toggle-hide-cli">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 20px;">
+                <div>
+                  <div style="color: var(--text-main); font-weight: 500; font-size: 14px;">Close to System Tray</div>
+                  <div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">If enabled, clicking the close button (X) will minimize the application to the system tray instead of quitting.</div>
+                </div>
+                <label class="switch" style="flex-shrink: 0;">
+                  <input type="checkbox" id="toggle-close-to-tray">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>

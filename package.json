@@ -1,0 +1,20 @@
+{
+  "name": "nanopd-pro",
+  "version": "1.0.0",
+  "description": "Portable Electron + Python Desktop Application Framework",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "python",
+    "fastapi",
+    "portable"
+  ],
+  "author": "liewcc",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^30.0.0"
+  }
+}

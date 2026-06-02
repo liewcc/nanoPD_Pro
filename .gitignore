@@ -1,0 +1,24 @@
+# Local Green Dependency Environments
+.venv/
+.node_portable/
+node_modules/
+
+# Python Cache and Compiled Files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# OS and Log Files
+*.log
+*.tmp
+*.zip
+Thumbs.db
+.DS_Store
+
+# Package Lock Files & Local Config
+package-lock.json
+.env
+.env.*
+!/sys_img/

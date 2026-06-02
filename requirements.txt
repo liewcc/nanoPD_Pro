@@ -1,0 +1,18 @@
+# Core Web API Framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+
+# Process & System Monitoring
+psutil>=5.9.0
+
+# Network & API Clients
+httpx>=0.27.0
+requests>=2.31.0
+google-genai>=0.1.0
+
+# Utilities & Config
+python-dotenv>=1.0.1
+pillow>=10.2.0
+pyserial>=3.5
+paho-mqtt>=2.1.0
+

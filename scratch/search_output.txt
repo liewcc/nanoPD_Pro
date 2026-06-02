@@ -1,0 +1,81 @@
+Total lines: 1376
+3: import paho.mqtt.client as mqtt
+25: "internet_sub_topic": get_val("cfg_sub_topic", "internet_sub_topic", ""),
+27: "internet_pub_topic": get_val("cfg_pub_topic", "internet_pub_topic", ""),
+35: "cellular_sub_topic": get_val("prov_sub_new", "cellular_sub_topic", ""),
+37: "cellular_pub_topic": get_val("prov_pub_new", "cellular_pub_topic", ""),
+75: "Topic": st.session_state.get(f"cell_sub_t_{j}", ""),
+85: "Topic": st.session_state.get(f"cell_pub_t_{j}", ""),
+89: cellular_mqtt.handle_apply_publishing(new_pubs)
+152: if 'mqtt_client' not in st.session_state:
+153: st.session_state.mqtt_client = None
+200: "cell_will_topic_en": False,
+202: "cell_will_topic": "",
+236: st.session_state.prov_sub_new = st.session_state.mqtt_cfg.get("cellular_sub_topic", "")
+338: st.toast("Host and Client ID are required.", icon="⚠️")
+341: if st.session_state.mqtt_client:
+342: st.session_state.mqtt_client.loop_stop()
+343: st.session_state.mqtt_client.disconnect()
+344: client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cid)
+352: client.user_data_set(shared_state)
+354: client.username_pw_set(user, pwd)
+371: c.subscribe(t, q)
+400: def on_message_cb(c, userdata, msg):
+431: client.on_connect = on_connect_cb
+432: client.on_disconnect = on_disconnect_cb
+433: client.on_message = on_message_cb
+434: client.connect(host, port, 60)
+435: client.loop_start()
+436: st.session_state.mqtt_client = client
+444: if st.session_state.mqtt_client:
+445: st.session_state.mqtt_client.loop_stop()
+446: st.session_state.mqtt_client.disconnect()
+447: st.session_state.mqtt_client = None
+452: def handle_subscribe(topic, qos):
+453: if not topic:
+456: if st.session_state.mqtt_client and is_conn:
+457: st.session_state.mqtt_client.subscribe(topic, qos)
+458: st.session_state.mqtt_subscriptions[topic] = qos
+459: st.toast(f"Subscribed to {topic}", icon="✅")
+462: st.session_state.mqtt_subscriptions[topic] = qos
+463: st.toast(f"Topic saved. Will subscribe when connected.", icon="ℹ️")
+465: def handle_unsubscribe(topic):
+466: if not topic:
+469: if st.session_state.mqtt_client and is_conn:
+470: st.session_state.mqtt_client.unsubscribe(topic)
+471: if topic in st.session_state.mqtt_subscriptions:
+472: del st.session_state.mqtt_subscriptions[topic]
+475: st.toast(f"Unsubscribed from {topic}", icon="✅")
+478: def handle_publish(topic, qos, payload):
+479: if not topic:
+480: st.toast("Topic is required.", icon="⚠️")
+483: if st.session_state.mqtt_client and is_conn:
+484: st.session_state.mqtt_client.publish(topic, payload, qos)
+515: st.toast("Cannot publish: Not connected.", icon="❌")
+563: client_id = st.text_input("Client ID", value=st.session_state.mqtt_cfg.get("internet_cid", "nanopd_mqtt_client"), key="c
+572: st.button("🔌 Connect", width="stretch", type="primary", on_click=handle_connect, args=(broker, port, client_id, username
+582: sub_topic = st.text_input("Sub Topic", value=st.session_state.mqtt_cfg.get("internet_sub_topic", "nanopd/test/#"), key="
+588: if st.button("➕ Subscribe", width="stretch", key="inet_sub"):
+589: handle_subscribe(sub_topic, sub_qos)
+592: active_topics = list(st.session_state.mqtt_subscriptions.keys())
+593: summary = " | ".join([f"{t} (Q{st.session_state.mqtt_subscriptions[t]})" for t in active_topics])
+597: st.selectbox("Remove", active_topics, key="unsub_select", label_visibility="collapsed")
+602: handle_unsubscribe(t)
+605: # PUBLISH MESSAGE (Topic & QoS)
+611: pub_topic = st.text_input("Pub Topic", value=st.session_state.mqtt_cfg.get("internet_pub_topic", "nanopd/test/pub"), key
+657: elif b'\nTopic:' in raw_data or b'Please check GPRS' in raw_data:
+741: st.button("📤 Publish", width="stretch", type="primary", disabled=not is_connected, on_click=handle_publish, args=(pub_to
+931: prov_cid = st.text_input("DTU Client ID", value=st.session_state.mqtt_cfg.get("cellular_cid", "nano_dtu_001"), key="prov
+947: subs_ui = st.session_state.get("cell_subs_ui", [{"topic": "", "qos": 0} for _ in range(4)])
+972: st.session_state[f"cell_sub_t_{i}"] = subs_ui[i]["topic"]
+997: # topic publishing
+1009: pubs_ui = st.session_state.get("cell_pubs_ui", [{"topic": "", "qos": 0, "retain": False} for _ in range(4)])
+1014: st.session_state[f"cell_pub_t_{i}"] = pubs_ui[i]["topic"]
+1039: # Will Topic row
+1042: st.checkbox("WT", key="cell_will_topic_en", label_visibility="collapsed", help="Enable Will Topic")
+1046: st.text_input("Will Topic", key="cell_will_topic", label_visibility="collapsed", placeholder="e.g. device/status")
+1082: help="Re-read all publish slots from DTU hardware")
+1158: st.button("📡 Publish Modbus Frame", width="stretch", type="secondary", disabled=not cell_connected, key="modbus_pub_btn_
+1181: st.checkbox("Enable Identifier", key="cell_enable_identifier", help="AT+TASKDIST: Prepend identifier key to published da
+1255: elif b'\nTopic:' in raw_data or b'Please check GPRS' in raw_data:
+1339: st.button("📤 Publish Payload", width="stretch", type="primary", disabled=not cell_connected, key="cell_send_new", on_cli

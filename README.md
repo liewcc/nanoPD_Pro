@@ -8,12 +8,27 @@ This guide walks you through the automatic setup and execution process step-by-s
 
 ---
 
-## ⚙️ Step 1: Automatic Project Setup
+## ⚙️ Step 1: Download and Extract the Project
 
-If you have downloaded and extracted this project to a local folder, follow these steps to configure the environment:
+Before setting up the environment, you need to download the repository files to your local machine:
 
-1. **Open the project root directory**:
-   - Double-click and enter the `nanoPD_Pro` folder (the directory containing `setup.bat`).
+1. **Go to the GitHub Repository**:
+   - Open this repository's main page in your browser.
+2. **Download the ZIP**:
+   - Click the green **Code** button located in the top-right section of the page.
+   - Click **Download ZIP** from the dropdown menu to save the project folder onto your computer.
+3. **Extract the ZIP**:
+   - Locate the downloaded `.zip` file on your computer.
+   - Right-click the file and select **Extract All...** to extract it into a local directory of your choice.
+
+---
+
+## ⚙️ Step 2: Automatic Project Setup
+
+Once the project files are extracted, follow these steps to configure the environment:
+
+1. **Open the project folder**:
+   - Double-click and enter the extracted `nanoPD_Pro` folder (the directory containing `setup.bat`).
 
 2. **Run the setup script**:
    - Double-click the **`setup.bat`** file.
@@ -33,7 +48,7 @@ If you have downloaded and extracted this project to a local folder, follow thes
 
 ---
 
-## 🚀 Step 2: Run the Application
+## 🚀 Step 3: Run the Application
 
 Once the automatic setup is complete, you can launch the app using either of the following simple methods:
 

@@ -10,11 +10,20 @@ echo ==================================================
 echo.
 
 :: 1. Verify uv is present
-echo [1/4] Checking for Astral uv engine...
+echo [1/5] Checking for Astral uv engine...
 where uv >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [ERROR] 'uv' was not found. Please install it first.
-    echo Run: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+    echo [INFO] Astral uv was not found. Installing it automatically...
+    powershell -Command "irm https://astral.sh/uv/install.ps1 | iex"
+    set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+)
+
+:: Re-verify uv is present after potential installation
+where uv >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] 'uv' could not be found or installed automatically.
+    echo Please run the following command manually in PowerShell to install:
+    echo powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
     pause
     exit /b
 )
@@ -22,7 +31,7 @@ echo [OK] uv is ready.
 
 :: 2. Initialize Python virtual environment via uv
 echo.
-echo [2/4] Initializing Python 3.12 virtual environment in .venv...
+echo [2/5] Initializing Python 3.12 virtual environment in .venv...
 if not exist .venv (
     uv venv --python 3.12
     if !errorlevel! neq 0 (
@@ -45,7 +54,7 @@ echo [OK] Python dependencies installed.
 
 :: 3. Setup Portable green Node.js if system node is missing
 echo.
-echo [3/4] Checking for Node.js engine...
+echo [3/5] Checking for Node.js engine...
 where node >nul 2>nul
 if %errorlevel%==0 (
     echo [OK] Global Node.js detected. System Node will be utilized.
@@ -73,7 +82,7 @@ if %errorlevel%==0 (
 
 :: 4. Install Node package dependencies (Electron)
 echo.
-echo [4/4] Installing Electron dependencies...
+echo [4/5] Installing Electron dependencies...
 if "%USE_PORTABLE%"=="1" (
     :: Add local portable node folder to temporary path variables
     set "PATH=%cd%\.node_portable;%PATH%"
@@ -86,6 +95,16 @@ if %errorlevel% neq 0 (
     echo [ERROR] Failed to install Node.js dependencies.
     pause
     exit /b
+)
+
+:: 5. Create Desktop Shortcut
+echo.
+echo [5/5] Creating Desktop Shortcut...
+powershell -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%USERPROFILE%\Desktop\Nano PD PRO.lnk'); $Shortcut.TargetPath = '%~dp0run.vbs'; $Shortcut.WorkingDirectory = '%~dp0'; $Shortcut.IconLocation = '%~dp0img\logo.ico'; $Shortcut.Save()"
+if %errorlevel% equ 0 (
+    echo [OK] Desktop shortcut created successfully with logo.ico.
+) else (
+    echo [WARNING] Failed to create desktop shortcut.
 )
 
 echo.

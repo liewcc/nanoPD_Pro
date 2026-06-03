@@ -21,8 +21,9 @@ As an AI agent working in this repository, you MUST strictly adhere to the follo
 
 ---
 
-## 2. Codebase & UI Language Standards
+## 2. Codebase & UI Language Standards & File Language
 
+- **All Repository Files:** All files in the repository (including source code, documentation, configuration, README, etc.) **MUST be written in English**.
 - **UI Elements:** All User Interface strings, labels, logs, dashboards, and placeholders **MUST be written in English**. 
 - **Documentation & Comments:** Inline code comments, function docstrings, and backend terminal prints must be written in English to support developer reading.
 

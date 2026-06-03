@@ -1,98 +1,99 @@
-# nanoPD Pro - 极简便携式 Electron + Python 双引擎桌面框架
+# nanoPD Pro - Lightweight Portable Electron + Python Dual-Engine Desktop Framework
 
-> **适合小白/新手用户的极简安装与运行指南** 🛠️
+> **A simplified installation and execution guide for beginners/non-technical users** 🛠️
 
-`nanoPD Pro` 是一款基于 **Electron** 前端与 **FastAPI (Python)** 后端双主机的便携式（Portable）桌面应用框架。该框架拥有极简的本地绿色化依赖管理体系，即使您的电脑上没有安装 Python 或 Node.js，也可以通过我们的自动化脚本一键完成配置并运行。
+`nanoPD Pro` is a portable desktop application framework powered by an **Electron** frontend and a **FastAPI (Python)** backend. It features a lightweight, self-contained dependency management system. Even if Python or Node.js is not pre-installed on your system, you can configure and run the application with a single click using our automation scripts.
 
-本指南专为新手设计，带您一步步完成安装与启动。
+This guide is designed for beginners to walk you through the setup and execution process step-by-step.
 
 ---
 
-## 📋 准备工作（前置要求）
+## 📋 Prerequisites
 
-在开始之前，您需要在您的 Windows 电脑上安装一个名为 **Astral uv** 的超快速 Python 包管理工具（**唯一需要手动安装的内容**）。
+Before starting, you need to install **Astral uv** (an extremely fast Python package installer and resolver) on your Windows machine (**this is the only manual installation required**).
 
-### 第一步：安装 Astral uv (极速 Python 工具)
-1. **打开 PowerShell**：
-   - 按下键盘上的 `Win + R` 键，在弹出的“运行”窗口中输入 `powershell` 并按回车（或点击确定）。
-2. **复制并粘贴以下命令**（直接选中复制，然后在 PowerShell 窗口中右键即可自动粘贴），然后按下回车：
+### Step 1: Install Astral uv
+1. **Open PowerShell**:
+   - Press the `Win + R` keys on your keyboard, type `powershell` in the pop-up "Run" dialog, and press Enter (or click OK).
+2. **Copy and Paste the command below** (select and copy, then right-click in the PowerShell window to paste it), and press Enter:
    ```powershell
    irm https://astral.sh/uv/install.ps1 | iex
    ```
-3. **确认安装成功**：
-   - 安装完成后，在命令行中输入以下命令并回车：
+3. **Verify the installation**:
+   - Once completed, type the following command and press Enter:
      ```powershell
      uv --version
      ```
-   - 如果能够看到类似 `uv 0.x.x` 的版本号输出，即表示准备工作已经就绪！
+   - If you see a version number output like `uv 0.x.x`, your system is ready!
 
 ---
 
-## ⚙️ 第二步：项目安装步骤
+## ⚙️ Step 2: Project Setup
 
-如果您已经下载并解压了本项目到本地文件夹，请按照以下步骤配置项目环境：
+If you have downloaded and extracted this project to a local folder, follow these steps to configure the environment:
 
-1. **打开项目根目录**：
-   - 在资源管理器中，双击进入 `nanoPD_Pro` 文件夹（即包含 `setup.bat` 文件的目录）。
+1. **Open the project root directory**:
+   - Double-click and enter the `nanoPD_Pro` folder (the directory containing `setup.bat`).
 
-2. **运行安装脚本**：
-   - 双击运行 **`setup.bat`** 文件。
-   - 此时会弹出一个黑色命令行窗口，显示 `nanoPD Pro Setup Engine` 的安装进度。
+2. **Run the setup script**:
+   - Double-click the **`setup.bat`** file.
+   - A black command prompt window will open, showing the installation progress of the `nanoPD Pro Setup Engine`.
 
-3. **脚本会自动为您做以下事情**：
-   - **检查 `uv` 环境**：确认您在上一步中已安装好 `uv` 工具。
-   - **配置 Python 环境**：在项目下自动创建 `.venv` 虚拟环境，并安装 `requirements.txt` 中所有的 Python 后端依赖（包括 FastAPI、Uvicorn、pyserial、paho-mqtt 等）。
-   - **配置 Node.js 环境**：
-     - 如果您电脑上已经全局安装了 Node.js，它会直接使用系统 Node.js。
-     - 如果您没有安装过 Node.js，**不用担心！** 脚本会自动去官网下载一个便携版绿色 Node.js，保存在项目内的 `.node_portable` 文件夹中。
-   - **安装前端依赖**：自动安装 Electron 及相关运行环境。
-   - **创建桌面快捷方式**：在您的 Windows 桌面上自动生成一个名为 **"Nano PD PRO"** 的快捷方式，并配有专属图标。
+3. **What the script does automatically**:
+   - **Check for `uv` environment**: Verifies that the `uv` tool is installed.
+   - **Configure Python environment**: Automatically creates a `.venv` virtual environment in the project directory and installs all Python backend dependencies listed in `requirements.txt` (including FastAPI, Uvicorn, pyserial, paho-mqtt, etc.).
+   - **Configure Node.js environment**:
+     - If you already have Node.js installed globally, it will use your system's Node.js.
+     - If you don't have Node.js installed, **no worries!** The script will automatically download a portable, green Node.js version from the official website and save it in the `.node_portable` directory.
+   - **Install frontend dependencies**: Automatically installs Electron and the required runtime libraries.
+   - **Create a Desktop Shortcut**: Generates a shortcut named **"Nano PD PRO"** with a custom icon on your Windows desktop.
 
-4. **完成安装**：
-   - 看到窗口中显示 `[SUCCESS] nanoPD Pro is ready to be launched!` 后，按下任意键即可关闭安装窗口。
-
----
-
-## 🚀 第三步：启动与运行软件
-
-环境安装完成后，您再也不需要通过复杂的命令行启动了！我们提供了非常简便的启动方式：
-
-### 方式 1：双击桌面快捷方式（最推荐 ⭐️）
-- 直接回到您的 Windows 桌面，找到并双击名为 **`Nano PD PRO`** 的图标即可运行。
-
-### 方式 2：使用项目目录下的启动脚本
-- 进入项目根目录，双击运行 **`run.bat`** 文件即可启动。
+4. **Complete Setup**:
+   - When the window displays `[SUCCESS] nanoPD Pro is ready to be launched!`, press any key to close the setup window.
 
 ---
 
-## 📂 项目结构简析（了解您的项目）
+## 🚀 Step 3: Run the Application
 
-当环境安装好后，项目目录中会包含以下重要文件夹与文件：
+Once the environment setup is complete, you no longer need to use command lines to launch the app! We provide two simple startup methods:
 
-- 📂 **`backend/`**：Python 后端源码，基于 FastAPI 构建，负责串口通信 (`Serial`)、`MQTT` 数据传输、系统诊断 (`psutil`) 等业务逻辑。
-- 📂 **`frontend/`**：前端网页资源，包括 `index.html`、`style.css`、`renderer.js` 等，界面风格采用深色质感美学。
-- 📂 **`img/`**：存放项目图标与 Logo 资源（如 `logo.ico`）。
-- 📄 **`main.js`**：Electron 的主进程入口，用于开启桌面窗口、动态扫描后端端口，以及生命周期管理（退出时自动清理 Python 后端进程）。
-- 📄 **`requirements.txt`**：Python 依赖清单。
-- 📄 **`package.json`**：Node.js 项目配置文件，声明了 Electron 依赖。
-- 🛡️ **`hide_cli.flag`**：*（控制标志）* 如果存在此文件，通过双击快捷方式或 `run.vbs` 运行程序时将自动在后台静默启动后端，不会弹出黑色的命令行窗口。
+### Method 1: Desktop Shortcut (Highly Recommended ⭐️)
+- Go to your Windows desktop, locate and double-click the **`Nano PD PRO`** shortcut icon to run the app.
+
+### Method 2: Launch Script in the Project Directory
+- Open the project root directory and double-click the **`run.bat`** file.
 
 ---
 
-## ⚠️ 常见问题与注意事项
+## 📂 Project Structure Overview
 
-1. **为什么运行 `setup.bat` 提示 'uv' 找不到？**
-   - 请确保您按照 [准备工作](#-准备工作前置要求) 成功安装了 `uv`。
-   - 如果安装了依然提示找不到，可以尝试重新打开一个新的资源管理器窗口，或者以管理员身份运行 PowerShell 再次执行 `uv` 安装命令。
+After setup, you will find the following key files and folders in the project directory:
 
-2. **这个项目会有残留的注册表或者全局依赖污染吗？**
-   - **完全不会！** 本项目使用的是 **Green/Portable (绿色便携化)** 的设计理念。
-   - 所有的依赖（包括 Node.js 与 Python 虚拟环境）都安装在项目根目录下的 `.node_portable` 和 `.venv` 内部，直接删除项目文件夹即可彻底卸载，非常干净。
-
-3. **双击启动时，为什么会闪退？**
-   - 可以在根目录下查看自动生成的 `backend.log` 文件，检查是否有端口被占用或底层串口冲突。
-   - 若遇到问题，可以尝试重新运行一次 `setup.bat` 重新修复依赖。
+- 📂 **`backend/`**: Python backend source code built on FastAPI, handling serial communication (`Serial`), `MQTT` transmission, system diagnostics (`psutil`), and other business logic.
+- 📂 **`frontend/`**: Frontend web assets, including `index.html`, `style.css`, and `renderer.js`. It features a premium, deep dark aesthetic.
+- 📂 **`img/`**: Project icons and image resources (such as `logo.ico`).
+- 📄 **`main.js`**: Electron main process entry, responsible for launching the window, dynamically scanning backend ports, and lifecycle management (automatically cleaning up Python processes on exit).
+- 📄 **`requirements.txt`**: Python dependencies list.
+- 📄 **`package.json`**: Node.js package metadata declaring Electron dependencies.
+- 📄 **`rule.md`**: Guidelines and design standards for development.
+- 🛡️ **`hide_cli.flag`**: *(Control Flag)* If this file exists, launching the application via the shortcut or `run.vbs` will start the backend silently in the background, suppressing the command prompt window.
 
 ---
 
-祝您使用愉快！如有任何问题，欢迎随时联系开发者。✨
+## ⚠️ Troubleshooting & FAQ
+
+1. **Why does running `setup.bat` complain that 'uv' is not found?**
+   - Make sure you successfully installed `uv` as detailed in the [Prerequisites](#-prerequisites) section.
+   - If it is installed but still unrecognized, try opening a new File Explorer / PowerShell window, or run PowerShell as Administrator to re-run the `uv` installation command.
+
+2. **Does this project pollute registry or global environment settings?**
+   - **Absolutely not!** This project follows a **Green/Portable** design philosophy.
+   - All dependencies (including Node.js and the Python virtual environment) are installed inside `.node_portable` and `.venv` within the project root. Deleting the project folder will completely uninstall everything without leaving any residue.
+
+3. **Why does the application crash immediately after launch?**
+   - Check the automatically generated `backend.log` file in the root directory to see if there are port conflicts or serial port access issues.
+   - If you encounter issues, try running `setup.bat` again to repair the dependency environment.
+
+---
+
+Enjoy using nanoPD Pro! If you have any questions, feel free to contact the developers. ✨

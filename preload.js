@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getShowMenuBarFlag: () => ipcRenderer.invoke('get-show-menu-bar'),
   writeMqttLog: (content) => ipcRenderer.invoke('write-mqtt-log', content),
   saveSystemConfig: (configData) => ipcRenderer.invoke('save-system-config', configData),
-  loadSystemConfig: () => ipcRenderer.invoke('load-system-config')
+  loadSystemConfig: () => ipcRenderer.invoke('load-system-config'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url)
 });

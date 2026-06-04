@@ -317,6 +317,17 @@ ipcMain.handle('load-system-config', (event) => {
   }
 });
 
+ipcMain.handle('open-external', async (event, url) => {
+  const { shell } = require('electron');
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch (e) {
+    console.error('[Main] Failed to open external URL:', e);
+    return false;
+  }
+});
+
 ipcMain.on('log-error', (event, errorText) => {
   const fs = require('fs');
   const logFile = path.join(__dirname, 'backend.log');

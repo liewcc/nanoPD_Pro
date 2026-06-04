@@ -315,6 +315,24 @@ body {
   border-color: var(--text-muted);
 }
 
+.btn-danger-outline {
+  background-color: rgba(234, 67, 53, 0.12);
+  color: #ff8a80;
+  border: 1px solid rgba(234, 67, 53, 0.35);
+  box-shadow: none;
+}
+
+.btn-danger-outline:hover {
+  background-color: rgba(234, 67, 53, 0.22);
+  border-color: rgba(234, 67, 53, 0.65);
+  color: #ff9e80;
+}
+
+.btn-danger-outline:active {
+  transform: translateY(1px);
+}
+
+
 .btn-small {
   padding: 6px 12px;
   font-size: 12px;

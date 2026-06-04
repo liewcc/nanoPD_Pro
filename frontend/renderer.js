@@ -14,6 +14,7 @@ const mqttStatuses = document.querySelectorAll('.mqtt-status');
 const navDashboard = document.getElementById('nav-dashboard');
 const navMqtt = document.getElementById('nav-mqtt');
 const navSystemConfig = document.getElementById('nav-system-config');
+const navVisitRepo = document.getElementById('nav-visit-repo');
 
 const viewDashboard = document.getElementById('view-dashboard');
 const viewMqtt = document.getElementById('view-mqtt');
@@ -81,6 +82,14 @@ function switchView(activeTab, targetPane) {
 if (navDashboard) navDashboard.addEventListener('click', () => switchView(navDashboard, viewDashboard));
 if (navMqtt) navMqtt.addEventListener('click', () => switchView(navMqtt, viewMqtt));
 if (navSystemConfig) navSystemConfig.addEventListener('click', () => switchView(navSystemConfig, viewSystemConfigPane));
+if (navVisitRepo) {
+  navVisitRepo.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (window.electronAPI && window.electronAPI.openExternal) {
+      window.electronAPI.openExternal('https://github.com/liewcc/nanoPD_Pro');
+    }
+  });
+}
 
 // Check backend connectivity regularly
 async function checkBackendHealth() {
@@ -2581,22 +2590,40 @@ if (btnDebugSaveAll) {
 const btnDebugConnectAll = document.getElementById('btn-debug-connect-all');
 if (btnDebugConnectAll) {
   btnDebugConnectAll.addEventListener('click', () => {
+    if (window.electronAPI && window.electronAPI.logRendererError) {
+      window.electronAPI.logRendererError('[DebugConnectAll] Clicked!');
+    }
     // 1. Internet MQTT Connect Broker
     const btnInet = document.getElementById('btn-inet-connect');
-    if (btnInet && btnInet.textContent.trim() === 'Connect Broker') {
-      btnInet.click();
+    if (btnInet) {
+      if (window.electronAPI && window.electronAPI.logRendererError) {
+        window.electronAPI.logRendererError(`[DebugConnectAll] btnInet text: "${btnInet.textContent}", disabled: ${btnInet.disabled}`);
+      }
+      if (btnInet.textContent.trim() === 'Connect Broker') {
+        btnInet.click();
+      }
     }
 
     // 2. Cellular MQTT Secondary COM Connection
     const btnCellModbus = document.getElementById('btn-cell-modbus-connect');
-    if (btnCellModbus && btnCellModbus.textContent.trim() === 'Connect Port') {
-      btnCellModbus.click();
+    if (btnCellModbus) {
+      if (window.electronAPI && window.electronAPI.logRendererError) {
+        window.electronAPI.logRendererError(`[DebugConnectAll] btnCellModbus text: "${btnCellModbus.textContent}", disabled: ${btnCellModbus.disabled}`);
+      }
+      if (btnCellModbus.textContent.trim() === 'Connect Port') {
+        btnCellModbus.click();
+      }
     }
 
     // 3. Cellular MQTT Cellular COM Connection
     const btnCell = document.getElementById('btn-cell-connect');
-    if (btnCell && btnCell.textContent.trim() === 'Connect Port') {
-      btnCell.click();
+    if (btnCell) {
+      if (window.electronAPI && window.electronAPI.logRendererError) {
+        window.electronAPI.logRendererError(`[DebugConnectAll] btnCell text: "${btnCell.textContent}", disabled: ${btnCell.disabled}`);
+      }
+      if (btnCell.textContent.trim() === 'Connect Port') {
+        btnCell.click();
+      }
     }
 
     // Visual feedback
@@ -2695,6 +2722,7 @@ let cellModbusFallbackTimerId = null;
 let lastCellModbusTrafficTime = 0;
 let cellModbusPortRxBuffer = [];
 let cellModbusSentCommandBytes = null;
+let cellModbusManualCommandBytes = null;
 let cellFallbackRxBuffer = [];
 let cellAutoCsqTimerId = null;
 let isCellAutoCsqQuerying = false;
@@ -2704,6 +2732,9 @@ const cellDataBitsSelect = document.getElementById('cell-data-bits-select');
 const cellStopBitsSelect = document.getElementById('cell-stop-bits-select');
 const cellParitySelect = document.getElementById('cell-parity-select');
 const btnCellConnect = document.getElementById('btn-cell-connect');
+const btnCellRefreshCsq = document.getElementById('btn-cell-refresh-csq');
+const btnCellReload = document.getElementById('btn-cell-reload');
+const btnCellReboot = document.getElementById('btn-cell-reboot');
 
 const cellBrokerIp = document.getElementById('cell-broker-ip');
 const cellBrokerPort = document.getElementById('cell-broker-port');
@@ -3083,6 +3114,10 @@ function checkCellPortOccupation() {
   if (modbusPortSelect && btnCellModbusConnect) {
     const isConnected = cellModbusSocket && cellModbusSocket.readyState === WebSocket.OPEN;
     const isConnecting = cellModbusSocket && cellModbusSocket.readyState === WebSocket.CONNECTING;
+    const btnSend = document.getElementById('btn-cell-modbus-send');
+    if (btnSend) {
+      btnSend.disabled = !isConnected;
+    }
     if (!isConnected && !isConnecting) {
       const selectedPort = modbusPortSelect.value;
       const info = details[selectedPort] || {};
@@ -3255,7 +3290,8 @@ function connectCellularDTU() {
 
       const autoCsqEn = document.getElementById('cell-auto-csq-en');
       if (autoCsqEn && autoCsqEn.checked) {
-        startCellAutoCsqPolling();
+        // Start polling but defer the first query since the provision process already queries CSQ
+        startCellAutoCsqPolling(true);
       }
 
       // Reset traffic state and timers on connect
@@ -3334,12 +3370,29 @@ function connectCellularDTU() {
           if (chkCellAutoscroll && chkCellAutoscroll.checked) {
             cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
           }
+          
+          if (msg.message && msg.message.includes('Reboot')) {
+            const btnReboot = document.getElementById('btn-cell-reboot');
+            if (btnReboot) {
+              btnReboot.disabled = false;
+              btnReboot.textContent = 'Reboot';
+            }
+          }
         } else if (msg.type === 'hw_state') {
           loadHwStateIntoUI(msg.state);
+          const btnReload = document.getElementById('btn-cell-reload');
+          if (btnReload) {
+            btnReload.disabled = false;
+            btnReload.textContent = 'Reload';
+          }
         } else if (msg.type === 'network_info') {
           loadNetworkInfoIntoUI(msg.data);
         } else if (msg.type === 'csq_info') {
           isCellAutoCsqQuerying = false;
+          if (btnCellRefreshCsq) {
+            btnCellRefreshCsq.disabled = false;
+            btnCellRefreshCsq.textContent = 'Query CSQ Now';
+          }
           const csqVal = msg.csq || 'N/A';
           const displayEl = document.getElementById('cell-auto-csq-display');
           if (displayEl) displayEl.textContent = csqVal;
@@ -3347,6 +3400,20 @@ function connectCellularDTU() {
           if (netCsqEl) netCsqEl.textContent = csqVal;
         } else if (msg.type === 'error') {
           isCellAutoCsqQuerying = false;
+          if (btnCellRefreshCsq) {
+            btnCellRefreshCsq.disabled = false;
+            btnCellRefreshCsq.textContent = 'Query CSQ Now';
+          }
+          const btnReload = document.getElementById('btn-cell-reload');
+          if (btnReload) {
+            btnReload.disabled = false;
+            btnReload.textContent = 'Reload';
+          }
+          const btnReboot = document.getElementById('btn-cell-reboot');
+          if (btnReboot) {
+            btnReboot.disabled = false;
+            btnReboot.textContent = 'Reboot';
+          }
           addLogToConsole(cellConsoleBody, `[Error] ${msg.message}`, 'error', chkCellTimeTag.checked);
         }
       } catch (err) {
@@ -3375,6 +3442,9 @@ function isCellModbusFallbackActive() {
 }
 
 function connectCellModbusPort() {
+  if (window.electronAPI && window.electronAPI.logRendererError) {
+    window.electronAPI.logRendererError('[connectCellModbusPort] Invoked!');
+  }
   const btn = document.getElementById('btn-cell-modbus-connect');
   if (!btn) return;
 
@@ -3397,8 +3467,15 @@ function connectCellModbusPort() {
   const parity = paritySelect.value === 'None' ? 'N' : paritySelect.value[0];
 
   if (!port) {
+    if (window.electronAPI && window.electronAPI.logRendererError) {
+      window.electronAPI.logRendererError('[connectCellModbusPort] Error: No Modbus COM port selected.');
+    }
     addLogToConsole(cellConsoleBody, '[System] Error: No Modbus COM port selected.', 'error', chkCellTimeTag.checked);
     return;
+  }
+
+  if (window.electronAPI && window.electronAPI.logRendererError) {
+    window.electronAPI.logRendererError(`[connectCellModbusPort] Connecting to port: ${port} @ ${baud}`);
   }
 
   addLogToConsole(cellConsoleBody, `[System] Connecting to Modbus COM Port on ${port} at ${baud} baud...`, 'system', chkCellTimeTag.checked);
@@ -3422,6 +3499,9 @@ function connectCellModbusPort() {
 
       addLogToConsole(cellConsoleBody, `[System] Modbus COM Port connected successfully. Ready.`, 'system', chkCellTimeTag.checked);
       
+      const btnSend = document.getElementById('btn-cell-modbus-send');
+      if (btnSend) btnSend.disabled = false;
+
       saveCellModbusSettings();
 
       if (typeof markPortOccupationLocally === 'function') {
@@ -3490,9 +3570,13 @@ function closeCellModbusPortUI() {
 
   addLogToConsole(cellConsoleBody, `[System] Modbus COM Port disconnected.`, 'system', chkCellTimeTag.checked);
 
+  const btnSend = document.getElementById('btn-cell-modbus-send');
+  if (btnSend) btnSend.disabled = true;
+
   cellModbusSocket = null;
   cellModbusPortRxBuffer = [];
   cellModbusSentCommandBytes = null;
+  cellModbusManualCommandBytes = null;
   if (cellModbusFallbackTimerId) {
     clearTimeout(cellModbusFallbackTimerId);
     cellModbusFallbackTimerId = null;
@@ -3568,6 +3652,27 @@ function handleCellModbusPortMessage(dataStr) {
         }
       }
 
+      if (cellModbusManualCommandBytes) {
+        const respBytes = parsed.frame;
+        const respText = `${bytesToHexSpaced(respBytes)}`;
+        const portSelect = document.getElementById('cell-modbus-port-select');
+        const portName = portSelect ? portSelect.value : 'COM';
+        addLogToConsole(cellConsoleBody, `<< [${portName} RX] ${respText}`, 'recv', chkCellTimeTag.checked);
+
+        // Feed to standard Modbus analyzer (CRC check accumulator) if enabled
+        const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+        if (crcEnabled) {
+          cellPushToAccumulator(cellModbusManualCommandBytes);
+          cellPushToAccumulator(respBytes);
+        }
+
+        if (chkCellAutoscroll && chkCellAutoscroll.checked) {
+          cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+        }
+
+        cellModbusManualCommandBytes = null;
+      }
+
       offset += parsed.len;
       cellModbusSentCommandBytes = null;
     } else {
@@ -3582,6 +3687,47 @@ function handleCellModbusPortMessage(dataStr) {
   if (offset > 0) {
     cellModbusPortRxBuffer = buf.slice(offset);
   }
+}
+
+function sendCellModbusManualRequest() {
+  if (!cellModbusSocket || cellModbusSocket.readyState !== WebSocket.OPEN) {
+    addLogToConsole(cellConsoleBody, `[Secondary COM Error] Socket is not open.`, 'error', chkCellTimeTag.checked);
+    return;
+  }
+
+  const cmdInput = document.getElementById('cell-modbus-fallback-cmd');
+  const cmdHex = cmdInput ? cmdInput.value.trim() : '';
+  if (!cmdHex) {
+    addLogToConsole(cellConsoleBody, `[Secondary COM Error] No Modbus command specified.`, 'error', chkCellTimeTag.checked);
+    return;
+  }
+
+  const cleanHex = cmdHex.replace(/\s+/g, '');
+  if (!/^[0-9A-Fa-f]+$/.test(cleanHex) || cleanHex.length % 2 !== 0) {
+    addLogToConsole(cellConsoleBody, `[Secondary COM Error] Invalid HEX command: ${cmdHex}`, 'error', chkCellTimeTag.checked);
+    return;
+  }
+
+  // Parse command bytes
+  const bytes = [];
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+  }
+  cellModbusManualCommandBytes = bytes;
+
+  // Log send to Cellular MQTT console
+  const portSelect = document.getElementById('cell-modbus-port-select');
+  const portName = portSelect ? portSelect.value : 'COM';
+  const displaySendHex = bytesToHexSpaced(bytes);
+  addLogToConsole(cellConsoleBody, `>> [${portName} TX] ${displaySendHex}`, 'send', chkCellTimeTag.checked);
+
+  // Send to secondary COM port
+  console.log(`[Secondary COM Manual] Sending command to Modbus Port: ${cleanHex}`);
+  cellModbusSocket.send(JSON.stringify({
+    action: 'write',
+    data: cleanHex,
+    hex: true
+  }));
 }
 
 function triggerModbusFallbackAction() {
@@ -3729,6 +3875,23 @@ function closeCellSocketUI() {
   }
   stopCellAutoCsqPolling(); // Clean up Auto CSQ Polling
   
+  // Reset CSQ display elements to N/A
+  const displayEl = document.getElementById('cell-auto-csq-display');
+  if (displayEl) displayEl.textContent = 'N/A';
+  const netCsqEl = document.getElementById('net-info-csq');
+  if (netCsqEl) netCsqEl.textContent = 'N/A';
+  
+  if (btnCellRefreshCsq) {
+    btnCellRefreshCsq.textContent = 'Query CSQ Now';
+  }
+  
+  if (btnCellReload) {
+    btnCellReload.textContent = 'Reload';
+  }
+  if (btnCellReboot) {
+    btnCellReboot.textContent = 'Reboot';
+  }
+  
   if (port && typeof markPortOccupationLocally === 'function') {
     markPortOccupationLocally(port, false);
   } else {
@@ -3739,7 +3902,7 @@ function closeCellSocketUI() {
 function toggleCellControlButtons(enabled) {
   const csqEn = document.getElementById('cell-auto-csq-en');
   const csqInt = document.getElementById('cell-auto-csq-interval');
-  [btnCellApplyMode, btnCellReloadUart, btnCellApplyUart, btnCellReloadSubs, btnCellApplySubs, btnCellReloadPubs, btnCellApplyPubs, btnCellApplyWill, btnCellReloadMqttcon, btnCellApplyMqttcon, btnCellPubModbus, btnCellReloadPoll, btnCellApplyPoll, btnCellCheckNet, btnCellConsoleSend, csqEn, csqInt].forEach(btn => {
+  [btnCellApplyMode, btnCellReloadUart, btnCellApplyUart, btnCellReloadSubs, btnCellApplySubs, btnCellReloadPubs, btnCellApplyPubs, btnCellApplyWill, btnCellReloadMqttcon, btnCellApplyMqttcon, btnCellPubModbus, btnCellReloadPoll, btnCellApplyPoll, btnCellCheckNet, btnCellConsoleSend, csqEn, csqInt, btnCellRefreshCsq, btnCellReload, btnCellReboot].forEach(btn => {
     if (btn) btn.disabled = !enabled;
   });
 }
@@ -3826,7 +3989,14 @@ function loadNetworkInfoIntoUI(info) {
   if (!info) return;
   document.getElementById('net-info-module').textContent = info.MODULE || 'N/A';
   document.getElementById('net-info-sysinfo').textContent = info.SYSINFO || 'N/A';
-  document.getElementById('net-info-csq').textContent = info.CSQ || 'N/A';
+  
+  const csqVal = info.CSQ || 'N/A';
+  document.getElementById('net-info-csq').textContent = csqVal;
+  const displayEl = document.getElementById('cell-auto-csq-display');
+  if (displayEl) {
+    displayEl.textContent = csqVal;
+  }
+  
   document.getElementById('net-info-clk').textContent = info.CLK || 'N/A';
   document.getElementById('net-info-iccid').textContent = info.ICCID || 'N/A';
   document.getElementById('net-info-sn').textContent = info.SN || 'N/A';
@@ -4005,6 +4175,9 @@ if (btnCellConnect) btnCellConnect.addEventListener('click', connectCellularDTU)
 
 const btnCellModbusConnect = document.getElementById('btn-cell-modbus-connect');
 if (btnCellModbusConnect) btnCellModbusConnect.addEventListener('click', connectCellModbusPort);
+
+const btnCellModbusSend = document.getElementById('btn-cell-modbus-send');
+if (btnCellModbusSend) btnCellModbusSend.addEventListener('click', sendCellModbusManualRequest);
 
 const cellModbusPortSelect = document.getElementById('cell-modbus-port-select');
 const cellModbusBaudSelect = document.getElementById('cell-modbus-baud-select');
@@ -4369,6 +4542,39 @@ if (chkCellAutoscroll) {
 
 const cellAutoCsqEn = document.getElementById('cell-auto-csq-en');
 const cellAutoCsqInterval = document.getElementById('cell-auto-csq-interval');
+
+if (btnCellRefreshCsq) {
+  btnCellRefreshCsq.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      if (!isCellAutoCsqQuerying) {
+        isCellAutoCsqQuerying = true;
+        btnCellRefreshCsq.disabled = true;
+        btnCellRefreshCsq.textContent = 'Querying...';
+        cellSocket.send(JSON.stringify({ action: 'query_csq' }));
+      }
+    }
+  });
+}
+
+if (btnCellReload) {
+  btnCellReload.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      btnCellReload.disabled = true;
+      btnCellReload.textContent = 'Reloading...';
+      cellSocket.send(JSON.stringify({ action: 'provision' }));
+    }
+  });
+}
+
+if (btnCellReboot) {
+  btnCellReboot.addEventListener('click', () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      btnCellReboot.disabled = true;
+      btnCellReboot.textContent = 'Rebooting...';
+      cellSocket.send(JSON.stringify({ action: 'reboot' }));
+    }
+  });
+}
 
 if (cellAutoCsqEn) {
   cellAutoCsqEn.addEventListener('change', () => {

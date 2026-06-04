@@ -720,6 +720,21 @@ async def websocket_cellular(
                 finally:
                     is_automating = False
                     
+            elif action == "reboot":
+                is_automating = True
+                await asyncio.sleep(0.2)
+                try:
+                    success = await asyncio.to_thread(cellular_mqtt_manager.enter_at_mode, ser, sync_log_cb)
+                    if success:
+                        await asyncio.to_thread(cellular_mqtt_manager.exit_at_mode, ser, True, sync_log_cb)
+                        queue_send({"type": "log", "direction": "SYS", "message": "[System] Reboot command sent successfully. DTU rebooting."})
+                    else:
+                        queue_send({"type": "error", "message": "Failed to enter AT mode."})
+                except Exception as e:
+                    queue_send({"type": "error", "message": f"Reboot failed: {str(e)}"})
+                finally:
+                    is_automating = False
+                    
             elif action == "apply_polling":
                 is_automating = True
                 await asyncio.sleep(0.2)

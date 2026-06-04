@@ -1,21 +1,26 @@
-import os
+import sys
 
-def search_in_dir(directory, keyword):
-    print(f"Searching for '{keyword}' in {directory}:")
-    for root, dirs, files in os.walk(directory):
-        if ".venv" in root or "node_modules" in root or ".git" in root:
-            continue
-        for file in files:
-            if file.endswith(('.py', '.js', '.html', '.css', '.md')):
-                filepath = os.path.join(root, file)
-                try:
-                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                        for idx, line in enumerate(f, 1):
-                            if keyword.lower() in line.lower():
-                                print(f"{filepath}:{idx}: {line.strip()[:100]}")
-                except Exception as e:
-                    pass
+with open(r"d:\AI\nanoPD_Pro\scratch\search_output.txt", "r", encoding="utf-8") as f:
+    text = f.read()
 
-search_in_dir(r"d:\AI\nanoPD", "registerInternetMsg")
-search_in_dir(r"d:\AI\nanoPD", "register_internet")
-search_in_dir(r"d:\AI\nanoPD", "register_cellular")
+matches = text.split("--- MATCH ")
+output_lines = []
+output_lines.append(f"Total MATCH blocks: {len(matches)}")
+
+for m in matches:
+    if "16" in m or "17" in m:
+        lines = m.split("\n")
+        relevant_lines = []
+        for line in lines:
+            if any(w in line for w in ["16", "17", "disappear", "missing", "丢失"]):
+                relevant_lines.append(line.strip())
+        if relevant_lines:
+            header = lines[0] if lines else "Match Block"
+            output_lines.append(f"\nBlock: {header[:100]}")
+            for rl in relevant_lines[:15]:
+                output_lines.append(f"  -> {rl[:200]}")
+
+with open(r"d:\AI\nanoPD_Pro\scratch\matches.txt", "w", encoding="utf-8") as out:
+    out.write("\n".join(output_lines))
+
+print("Done! Output saved to matches.txt")

@@ -30,7 +30,7 @@
     <!-- Left Navigation Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <span class="brand-sparkle">✦</span>
+        <img src="assets/logo.png" class="brand-logo" alt="Logo">
         <h1 class="brand-name">nanoPD <span>Pro</span></h1>
       </div>
       
@@ -293,6 +293,11 @@
           <button class="sub-tab-btn active" id="sub-tab-btn-internet">🌐 Internet MQTT</button>
           <button class="sub-tab-btn" id="sub-tab-btn-cellular">📶 Cellular MQTT</button>
           <button class="sub-tab-btn" id="sub-tab-btn-perf">📊 Performance</button>
+          
+          <div id="mqtt-payload-status-container" class="mqtt-payload-badge-container" style="display: none;">
+            <span id="mqtt-payload-badge" class="mqtt-payload-badge">payload pass</span>
+            <span id="mqtt-payload-time" class="mqtt-payload-badge-time">--:--:--</span>
+          </div>
         </div>
 
         <!-- Tab 1: Internet MQTT Pane -->

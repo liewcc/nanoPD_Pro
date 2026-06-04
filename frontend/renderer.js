@@ -1657,6 +1657,7 @@ function modbusFrameLength(bytes, offset, hint) {
  */
 function tryParseModbusAt(bytes, offset, hint = 'auto') {
   const hints = hint === 'auto' ? ['response', 'request'] : [hint];
+  let crcErrorFound = false;
   for (const h of hints) {
     const { len, type, fc } = modbusFrameLength(bytes, offset, h) || {};
     if (!len || len < 0) continue;
@@ -1666,8 +1667,13 @@ function tryParseModbusAt(bytes, offset, hint = 'auto') {
     const calcCrc = crc16Modbus(frame.slice(0, bodyLen));
     const recCrc = frame[bodyLen] | (frame[bodyLen + 1] << 8);
     if (calcCrc === recCrc) {
-      return { frame, len, type, fc };
+      return { frame, len, type, fc, crcError: false };
+    } else {
+      crcErrorFound = true;
     }
+  }
+  if (crcErrorFound) {
+    return { crcError: true };
   }
   return null;
 }
@@ -1774,6 +1780,9 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
     return;
   }
 
+  const parsedResponseIndexes = new Set();
+  let hasCrcError = false;
+
   // Sort rules by index to match their polling sequence order
   const rulesBySeq = [...rules].sort((a, b) => {
     const idxA = (a.index !== undefined && a.index !== 'secondary') ? a.index : 9999;
@@ -1869,6 +1878,13 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
               if (calcCrc === recCrc) {
                 logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, ruleIndex);
                 advance += respLen;
+                if (consoleType === 'inet' && ruleIndex !== undefined && ruleIndex !== 'secondary') {
+                  parsedResponseIndexes.add(Number(ruleIndex));
+                }
+              } else {
+                if (consoleType === 'inet') {
+                  hasCrcError = true;
+                }
               }
             }
           }
@@ -1881,7 +1897,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
     // 2. Standalone response check (useful when requests are not visible in the stream)
     const parsedResp = tryParseModbusAt(buf, offset, 'response');
-    if (parsedResp) {
+    if (parsedResp && !parsedResp.crcError) {
       const respFrame = parsedResp.frame;
       const isErrResp = (respFrame[1] & 0x80) !== 0;
       const fcTarget = respFrame[1] & 0x7F;
@@ -2036,15 +2052,22 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
       }
 
       logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
+      if (consoleType === 'inet' && chosenRule && chosenRule.index !== undefined && chosenRule.index !== 'secondary') {
+        parsedResponseIndexes.add(Number(chosenRule.index));
+      }
       matchCount++;
       offset += parsedResp.len;
       continue;
+    } else if (parsedResp && parsedResp.crcError) {
+      if (consoleType === 'inet') {
+        hasCrcError = true;
+      }
     }
 
 
     // 3. Standalone request check
     const parsedReq = tryParseModbusAt(buf, offset, 'request');
-    if (parsedReq) {
+    if (parsedReq && !parsedReq.crcError) {
       const reqFrame = parsedReq.frame;
       const candidateRules = rulesBySeq.filter(r => {
         return r.bytes.length === reqFrame.length && r.bytes.every((b, i) => b === reqFrame[i]);
@@ -2063,6 +2086,10 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
       matchCount++;
       offset += parsedReq.len;
       continue;
+    } else if (parsedReq && parsedReq.crcError) {
+      if (consoleType === 'inet') {
+        hasCrcError = true;
+      }
     }
 
     // 4. Slide window forward
@@ -2071,6 +2098,20 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
   if (matchCount === 0) {
     addLogToConsole(consoleBody, `[Modbus CRC] No matching Polling command found in ${buf.length} bytes. Please check if Polling Commands List matches the actual transmitted commands.`, 'system', timeTagEnabled);
+  }
+
+  if (consoleType === 'inet') {
+    const configuredIndices = new Set(
+      rules
+        .filter(r => r.index !== 'secondary' && r.index !== undefined)
+        .map(r => Number(r.index))
+    );
+    // Only update the badge if this buffer contained primary Modbus responses or encountered CRC errors
+    if (parsedResponseIndexes.size > 0 || hasCrcError) {
+      const isComplete = configuredIndices.size > 0 && Array.from(configuredIndices).every(idx => parsedResponseIndexes.has(idx));
+      const isPass = isComplete && !hasCrcError;
+      updateMqttPayloadBadge(isPass);
+    }
   }
 }
 
@@ -2315,6 +2356,29 @@ function rebuildActiveSubsList() {
   });
 }
 
+function updateDebugConnectAllButton() {
+  const btnDebugConnectAll = document.getElementById('btn-debug-connect-all');
+  if (!btnDebugConnectAll) return;
+
+  const btnInet = document.getElementById('btn-inet-connect');
+  const btnCellModbus = document.getElementById('btn-cell-modbus-connect');
+  const btnCell = document.getElementById('btn-cell-connect');
+
+  const inetOpen = btnInet && btnInet.textContent.trim() === 'Disconnect Broker';
+  const cellModbusOpen = btnCellModbus && btnCellModbus.textContent.trim() === 'Disconnect Port';
+  const cellOpen = btnCell && btnCell.textContent.trim() === 'Disconnect Port';
+
+  const anyOpen = inetOpen || cellModbusOpen || cellOpen;
+
+  if (anyOpen) {
+    btnDebugConnectAll.textContent = 'Disconnect All Ports & Broker';
+    btnDebugConnectAll.style.background = 'linear-gradient(135deg, var(--danger), #b02a37)';
+  } else {
+    btnDebugConnectAll.textContent = 'Connect All Ports & Broker';
+    btnDebugConnectAll.style.background = 'linear-gradient(135deg, hsl(142, 60%, 40%), hsl(142, 70%, 45%))';
+  }
+}
+
 function connectInetBroker() {
   if (inetSocket && inetSocket.readyState === WebSocket.OPEN) {
     inetSocket.send(JSON.stringify({ action: 'close' }));
@@ -2352,6 +2416,7 @@ function connectInetBroker() {
         const qos = inetSubs[topic];
         inetSocket.send(JSON.stringify({ action: 'subscribe', topic, qos }));
       });
+      updateDebugConnectAllButton();
     };
     
     inetSocket.onmessage = (event) => {
@@ -2434,6 +2499,26 @@ function closeInetSocketUI() {
   btnInetConnect.style.background = '';
   if (btnInetPub) btnInetPub.disabled = true;
   inetSocket = null;
+  updateDebugConnectAllButton();
+}
+
+function updateMqttPayloadBadge(isPass) {
+  const container = document.getElementById('mqtt-payload-status-container');
+  const badge = document.getElementById('mqtt-payload-badge');
+  const timeSpan = document.getElementById('mqtt-payload-time');
+  if (!container || !badge || !timeSpan) return;
+
+  const now = getFormattedTime();
+  container.style.display = 'flex';
+  timeSpan.textContent = now;
+
+  if (isPass) {
+    badge.textContent = 'payload pass';
+    badge.className = 'mqtt-payload-badge pass';
+  } else {
+    badge.textContent = 'payload fail';
+    badge.className = 'mqtt-payload-badge fail';
+  }
 }
 
 if (btnInetConnect) btnInetConnect.addEventListener('click', connectInetBroker);
@@ -2490,6 +2575,8 @@ if (btnClearInetConsole) {
     inetConsoleBody.innerHTML = '';
     inetConsoleHistory = [];
     localStorage.removeItem('inet_console_history');
+    const container = document.getElementById('mqtt-payload-status-container');
+    if (container) container.style.display = 'none';
   });
 }
 
@@ -2542,6 +2629,8 @@ if (btnDebugClearAll) {
     inetConsoleBody.innerHTML = '';
     inetConsoleHistory = [];
     localStorage.removeItem('inet_console_history');
+    const container = document.getElementById('mqtt-payload-status-container');
+    if (container) container.style.display = 'none';
 
     // Clear Cellular MQTT Console
     cellConsoleBody.innerHTML = '';
@@ -2593,45 +2682,29 @@ if (btnDebugConnectAll) {
     if (window.electronAPI && window.electronAPI.logRendererError) {
       window.electronAPI.logRendererError('[DebugConnectAll] Clicked!');
     }
-    // 1. Internet MQTT Connect Broker
     const btnInet = document.getElementById('btn-inet-connect');
-    if (btnInet) {
-      if (window.electronAPI && window.electronAPI.logRendererError) {
-        window.electronAPI.logRendererError(`[DebugConnectAll] btnInet text: "${btnInet.textContent}", disabled: ${btnInet.disabled}`);
-      }
-      if (btnInet.textContent.trim() === 'Connect Broker') {
-        btnInet.click();
-      }
-    }
-
-    // 2. Cellular MQTT Secondary COM Connection
     const btnCellModbus = document.getElementById('btn-cell-modbus-connect');
-    if (btnCellModbus) {
-      if (window.electronAPI && window.electronAPI.logRendererError) {
-        window.electronAPI.logRendererError(`[DebugConnectAll] btnCellModbus text: "${btnCellModbus.textContent}", disabled: ${btnCellModbus.disabled}`);
-      }
-      if (btnCellModbus.textContent.trim() === 'Connect Port') {
-        btnCellModbus.click();
-      }
-    }
-
-    // 3. Cellular MQTT Cellular COM Connection
     const btnCell = document.getElementById('btn-cell-connect');
-    if (btnCell) {
-      if (window.electronAPI && window.electronAPI.logRendererError) {
-        window.electronAPI.logRendererError(`[DebugConnectAll] btnCell text: "${btnCell.textContent}", disabled: ${btnCell.disabled}`);
-      }
-      if (btnCell.textContent.trim() === 'Connect Port') {
-        btnCell.click();
-      }
+
+    const inetOpen = btnInet && btnInet.textContent.trim() === 'Disconnect Broker';
+    const cellModbusOpen = btnCellModbus && btnCellModbus.textContent.trim() === 'Disconnect Port';
+    const cellOpen = btnCell && btnCell.textContent.trim() === 'Disconnect Port';
+
+    const anyOpen = inetOpen || cellModbusOpen || cellOpen;
+
+    if (anyOpen) {
+      // Disconnect all
+      if (inetOpen) btnInet.click();
+      if (cellModbusOpen) btnCellModbus.click();
+      if (cellOpen) btnCell.click();
+    } else {
+      // Connect all
+      if (btnInet && btnInet.textContent.trim() === 'Connect Broker') btnInet.click();
+      if (btnCellModbus && btnCellModbus.textContent.trim() === 'Connect Port') btnCellModbus.click();
+      if (btnCell && btnCell.textContent.trim() === 'Connect Port') btnCell.click();
     }
 
-    // Visual feedback
-    const origText = btnDebugConnectAll.textContent;
-    btnDebugConnectAll.textContent = '✔ Connecting All...';
-    setTimeout(() => {
-      btnDebugConnectAll.textContent = origText;
-    }, 1500);
+    updateDebugConnectAllButton();
   });
 }
 
@@ -3302,6 +3375,7 @@ function connectCellularDTU() {
       }
 
       startFallbackTimerIfActive();
+      updateDebugConnectAllButton();
     };
     
     cellSocket.onmessage = (event) => {
@@ -3516,6 +3590,7 @@ function connectCellModbusPort() {
       }
 
       startFallbackTimerIfActive();
+      updateDebugConnectAllButton();
     };
 
     cellModbusSocket.onmessage = (event) => {
@@ -3588,6 +3663,7 @@ function closeCellModbusPortUI() {
   } else {
     checkCellPortOccupation();
   }
+  updateDebugConnectAllButton();
 }
 
 function handleCellModbusPortMessage(dataStr) {
@@ -3897,6 +3973,7 @@ function closeCellSocketUI() {
   } else {
     checkCellPortOccupation();
   }
+  updateDebugConnectAllButton();
 }
 
 function toggleCellControlButtons(enabled) {

@@ -1,5 +1,86 @@
 {
-  "backup_polling_list": [],
+  "backup_polling_list": [
+    {
+      "Index": 1,
+      "Command": "2F0300320064E3A0"
+    },
+    {
+      "Index": 2,
+      "Command": "2F0300960064A243"
+    },
+    {
+      "Index": 3,
+      "Command": "2F0300FA0064625E"
+    },
+    {
+      "Index": 4,
+      "Command": "2F03015E00642241"
+    },
+    {
+      "Index": 5,
+      "Command": "2F0301C20064E26F"
+    },
+    {
+      "Index": 6,
+      "Command": "2F0302260064A21C"
+    },
+    {
+      "Index": 7,
+      "Command": "2F03028A0064623D"
+    },
+    {
+      "Index": 8,
+      "Command": "2F0302EE006423E2"
+    },
+    {
+      "Index": 9,
+      "Command": "2F0303520064E3FA"
+    },
+    {
+      "Index": 10,
+      "Command": "2F0303B60064A3CD"
+    },
+    {
+      "Index": 11,
+      "Command": "2F03041A00646298"
+    },
+    {
+      "Index": 12,
+      "Command": "2F03047E00642347"
+    },
+    {
+      "Index": 13,
+      "Command": "2F0304E20064E369"
+    },
+    {
+      "Index": 14,
+      "Command": "2F0305460064A376"
+    },
+    {
+      "Index": 15,
+      "Command": "2F0305AA00646283"
+    },
+    {
+      "Index": 16,
+      "Command": "2F03060E00642324"
+    },
+    {
+      "Index": 17,
+      "Command": "2F0306720064E2FC"
+    },
+    {
+      "Index": 18,
+      "Command": "2F0306D60064A31F"
+    },
+    {
+      "Index": 19,
+      "Command": "2F03073A00646316"
+    },
+    {
+      "Index": 20,
+      "Command": "2F03079E006422F5"
+    }
+  ],
   "ascii_match_rules": [
     "0D 0A 50 6C 65 61 73 65 20 63 68 65 63 6B 20 47 50 52 53 20 21 21 21 0D 0A",
     "0D 0A 2B 41 54 4B 20 4D 6F 64 75 6C 65 20 57 69 6C 6C 20 52 65 73 74 61 72 74",

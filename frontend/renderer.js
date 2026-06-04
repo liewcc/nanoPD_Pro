@@ -437,6 +437,7 @@ const btnAddAsciiRule = document.getElementById('btn-add-ascii-rule');
 
 function saveAsciiMatchRules() {
   localStorage.setItem('ascii_match_rules', JSON.stringify(asciiMatchRules));
+  saveSystemConfigToFile();
 }
 
 function rebuildAsciiMatchRulesUI() {
@@ -502,7 +503,144 @@ if (btnAddAsciiRule && inputAsciiRule) {
   });
 }
 
-function loadAsciiMatchRules() {
+// Backup Polling List State & UI elements
+let backupPollingList = [];
+const backupPollCommandsBody = document.getElementById('backup-poll-commands-body');
+const inputBackupPollCmd = document.getElementById('input-backup-poll-cmd');
+const btnAddBackupPollCmd = document.getElementById('btn-add-backup-poll-cmd');
+
+function saveBackupPollingList() {
+  localStorage.setItem('backup_polling_list', JSON.stringify(backupPollingList));
+  saveSystemConfigToFile();
+}
+
+function rebuildBackupPollingUI() {
+  if (!backupPollCommandsBody) return;
+  backupPollCommandsBody.innerHTML = '';
+  if (backupPollingList.length === 0) {
+    backupPollCommandsBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted); font-style: italic; padding: 12px 8px;">No backup commands configured</td></tr>';
+    return;
+  }
+  
+  // Sort by index ascending
+  backupPollingList.sort((a, b) => a.Index - b.Index);
+  
+  backupPollingList.forEach((item, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="color: var(--text-main); font-size: 11px; padding: 6px 8px;">${item.Index}</td>
+      <td style="color: var(--text-main); font-family: var(--font-mono); font-size: 11px; padding: 6px 8px;">${formatHexWithSpaces(item.Command)}</td>
+      <td style="text-align: center; vertical-align: middle;">
+        <button class="btn-remove-row btn-remove-backup-poll" data-index="${idx}" style="cursor: pointer; background: transparent; border: none; color: var(--danger);">✖</button>
+      </td>
+    `;
+    backupPollCommandsBody.appendChild(tr);
+  });
+
+  // Attach remove handlers
+  backupPollCommandsBody.querySelectorAll('.btn-remove-backup-poll').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const idx = parseInt(e.target.getAttribute('data-index'));
+      backupPollingList.splice(idx, 1);
+      
+      // Re-index remaining commands sequentially
+      backupPollingList.forEach((item, i) => {
+        item.Index = i + 1;
+      });
+      
+      saveBackupPollingList();
+      rebuildBackupPollingUI();
+    });
+  });
+}
+
+if (btnAddBackupPollCmd && inputBackupPollCmd) {
+  btnAddBackupPollCmd.addEventListener('click', () => {
+    const cmdVal = inputBackupPollCmd.value.trim();
+    if (!cmdVal) return;
+    
+    // Clean and validate hex string (only hex characters and spaces allowed)
+    const cleanCmd = cmdVal.replace(/\s+/g, '');
+    if (!/^[0-9A-Fa-f]{6,}$/.test(cleanCmd) || cleanCmd.length % 2 !== 0) {
+      alert('Invalid Modbus HEX command! Please enter a valid hex string of even length.');
+      return;
+    }
+    
+    const nextIdx = backupPollingList.length + 1;
+    backupPollingList.push({
+      Index: nextIdx,
+      Command: cleanCmd.toUpperCase()
+    });
+    
+    saveBackupPollingList();
+    inputBackupPollCmd.value = '';
+    rebuildBackupPollingUI();
+  });
+  
+  inputBackupPollCmd.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      btnAddBackupPollCmd.click();
+    }
+  });
+}
+
+function saveSystemConfigToFile() {
+  const configData = {
+    backup_polling_list: backupPollingList,
+    ascii_match_rules: asciiMatchRules
+  };
+  if (window.electronAPI && window.electronAPI.saveSystemConfig) {
+    window.electronAPI.saveSystemConfig(configData).then(res => {
+      if (res && res.ok) {
+        console.log('[System Config] Saved to file successfully:', res.path);
+      } else {
+        console.error('[System Config] Failed to save to file:', res ? res.error : 'Unknown error');
+      }
+    });
+  }
+}
+
+function initializeSystemConfig() {
+  if (window.electronAPI && window.electronAPI.loadSystemConfig) {
+    window.electronAPI.loadSystemConfig().then(res => {
+      if (res && res.ok && res.data) {
+        console.log('[System Config] Loaded successfully from file.');
+        const data = res.data;
+        
+        // 1. Load ASCII match rules
+        if (Array.isArray(data.ascii_match_rules)) {
+          asciiMatchRules = data.ascii_match_rules;
+          localStorage.setItem('ascii_match_rules', JSON.stringify(asciiMatchRules));
+        } else {
+          loadAsciiMatchRulesFromLocalStorage();
+        }
+        
+        // 2. Load backup polling list
+        if (Array.isArray(data.backup_polling_list)) {
+          backupPollingList = data.backup_polling_list;
+          localStorage.setItem('backup_polling_list', JSON.stringify(backupPollingList));
+        } else {
+          loadBackupPollingListFromLocalStorage();
+        }
+      } else {
+        console.log('[System Config] No JSON config file found or load failed, falling back to LocalStorage.');
+        loadAsciiMatchRulesFromLocalStorage();
+        loadBackupPollingListFromLocalStorage();
+      }
+      
+      // Rebuild UIs
+      rebuildAsciiMatchRulesUI();
+      rebuildBackupPollingUI();
+    });
+  } else {
+    loadAsciiMatchRulesFromLocalStorage();
+    loadBackupPollingListFromLocalStorage();
+    rebuildAsciiMatchRulesUI();
+    rebuildBackupPollingUI();
+  }
+}
+
+function loadAsciiMatchRulesFromLocalStorage() {
   const raw = localStorage.getItem('ascii_match_rules');
   if (raw) {
     try {
@@ -517,12 +655,56 @@ function loadAsciiMatchRules() {
       "0D 0A 2B 41 54 4B 20 4D 6F 64 75 6C 65 20 57 69 6C 6C 20 52 65 73 74 61 72 74",
       "41 54 4B 2D 4C 54 45 2D 44 54 55"
     ];
-    saveAsciiMatchRules();
+    localStorage.setItem('ascii_match_rules', JSON.stringify(asciiMatchRules));
   }
-  rebuildAsciiMatchRulesUI();
 }
 
-loadAsciiMatchRules();
+function loadBackupPollingListFromLocalStorage() {
+  const raw = localStorage.getItem('backup_polling_list');
+  if (raw) {
+    try {
+      backupPollingList = JSON.parse(raw) || [];
+    } catch(e) {
+      backupPollingList = [];
+    }
+  } else {
+    backupPollingList = [];
+  }
+}
+
+// Initialize System Config (loads from file or localStorage)
+initializeSystemConfig();
+
+// Copy Cellular Polling commands to Backup Polling list in System Config
+const btnCellPollCopyBackup = document.getElementById('btn-cell-poll-copy-backup');
+if (btnCellPollCopyBackup) {
+  btnCellPollCopyBackup.addEventListener('click', () => {
+    const currentCellList = getPollingListFromUI();
+    if (currentCellList.length === 0) {
+      alert('The Polling Commands List is empty! Nothing to copy.');
+      return;
+    }
+    
+    // Map to backup list format (Index and Command)
+    backupPollingList = currentCellList.map((item, i) => ({
+      Index: item.Index || (i + 1),
+      Command: item.Command
+    }));
+    
+    // Save to local storage & file
+    saveBackupPollingList();
+    
+    // Update UI
+    rebuildBackupPollingUI();
+    
+    // Flash visual feedback on the button
+    const origText = btnCellPollCopyBackup.textContent;
+    btnCellPollCopyBackup.textContent = '✔ Copied!';
+    setTimeout(() => {
+      btnCellPollCopyBackup.textContent = origText;
+    }, 1500);
+  });
+}
 
 
 // Helper to format raw hex input with spaces between every byte pair
@@ -1484,25 +1666,33 @@ function tryParseModbusAt(bytes, offset, hint = 'auto') {
 function getKnownCommandRules() {
   const rules = [];
   
-  // 1. POLLING COMMANDS LIST
+  // 1. POLLING COMMANDS LIST (Primary)
+  let pollingList = [];
   if (typeof getPollingListFromUI === 'function') {
-    const pollingList = getPollingListFromUI();
-    pollingList.forEach(item => {
-      const clean = item.Command.replace(/\s+/g, '').toUpperCase();
-      if (/^[0-9A-Fa-f]{6,}$/.test(clean) && clean.length % 2 === 0) {
-        const bytes = [];
-        for (let i = 0; i < clean.length; i += 2) {
-          bytes.push(parseInt(clean.substring(i, i + 2), 16));
-        }
-        rules.push({
-          bytes: bytes,
-          prefix: bytes.slice(0, -2),
-          reqLen: bytes.length,
-          index: item.Index  // 1-based index from POLLING COMMANDS LIST
-        });
-      }
-    });
+    pollingList = getPollingListFromUI();
   }
+  
+  // Fallback to System Config backup list if Cellular list is empty or Cellular MQTT is not active/connected
+  const isCellActive = (typeof cellSocket !== 'undefined' && cellSocket && cellSocket.readyState === WebSocket.OPEN);
+  if ((pollingList.length === 0 || !isCellActive) && typeof backupPollingList !== 'undefined') {
+    pollingList = backupPollingList;
+  }
+  
+  pollingList.forEach(item => {
+    const clean = item.Command.replace(/\s+/g, '').toUpperCase();
+    if (/^[0-9A-Fa-f]{6,}$/.test(clean) && clean.length % 2 === 0) {
+      const bytes = [];
+      for (let i = 0; i < clean.length; i += 2) {
+        bytes.push(parseInt(clean.substring(i, i + 2), 16));
+      }
+      rules.push({
+        bytes: bytes,
+        prefix: bytes.slice(0, -2),
+        reqLen: bytes.length,
+        index: item.Index  // 1-based index
+      });
+    }
+  });
 
   // 2. Secondary COM Connection (MODBUS COMMAND HEX)
   const secondaryCmdInput = document.getElementById('cell-modbus-fallback-cmd');

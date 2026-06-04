@@ -919,7 +919,10 @@
                       </tbody>
                     </table>
                   </div>
-                  <button id="btn-cell-poll-add" class="btn btn-secondary btn-small" style="margin-top: 6px; width: auto; align-self: flex-start;">➕ Add Row</button>
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <button id="btn-cell-poll-add" class="btn btn-secondary btn-small" style="margin-top: 6px; width: auto;">➕ Add Row</button>
+                    <button id="btn-cell-poll-copy-backup" class="btn btn-secondary btn-small" style="margin-top: 6px; width: auto;" title="Copy these commands to the backup polling list in System Config">📋 Copy to Backup</button>
+                  </div>
                 </div>
 
                 <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
@@ -1103,6 +1106,36 @@
                   </tr>
                 </thead>
                 <tbody id="ascii-rules-body">
+                  <!-- Dynamic Rows -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Card C: Backup Polling Commands List -->
+          <div class="com-left-card" style="width: 100%;">
+            <div class="panel-section-title" style="color: var(--accent); font-size: 14px; margin-bottom: 8px;">🔄 Backup Polling Commands List</div>
+            <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+              Configure a list of backup Modbus polling commands to be used by the Internet MQTT Log parser if the Cellular MQTT polling list is empty.
+            </div>
+            
+            <!-- Input area to add command -->
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" id="input-backup-poll-cmd" class="form-input" placeholder="e.g. 2F 03 00 32 00 64 E3 A0">
+              <button id="btn-add-backup-poll-cmd" class="btn btn-secondary" style="width: 80px; flex-shrink: 0; padding: 0 12px; height: 34px;">Add</button>
+            </div>
+
+            <!-- List area to display commands -->
+            <div class="polling-table-container" style="max-height: 250px;">
+              <table class="polling-table" id="table-backup-poll-commands">
+                <thead>
+                  <tr>
+                    <th style="width: 15%;">Index</th>
+                    <th style="width: 75%;">Modbus Command (HEX)</th>
+                    <th style="width: 10%; text-align: center;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="backup-poll-commands-body">
                   <!-- Dynamic Rows -->
                 </tbody>
               </table>

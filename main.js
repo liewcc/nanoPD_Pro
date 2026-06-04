@@ -286,6 +286,37 @@ ipcMain.handle('write-mqtt-log', (event, content) => {
   }
 });
 
+ipcMain.handle('save-system-config', (event, configData) => {
+  const fs = require('fs');
+  const dataDir = path.join(__dirname, 'data');
+  const configPath = path.join(dataDir, 'system_config.json');
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    fs.writeFileSync(configPath, JSON.stringify(configData, null, 2), 'utf8');
+    return { ok: true, path: configPath };
+  } catch (e) {
+    console.error('[Main] Failed to write system_config.json:', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('load-system-config', (event) => {
+  const fs = require('fs');
+  const configPath = path.join(__dirname, 'data', 'system_config.json');
+  try {
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, 'utf8');
+      return { ok: true, data: JSON.parse(raw) };
+    }
+    return { ok: false, error: 'File does not exist' };
+  } catch (e) {
+    console.error('[Main] Failed to read system_config.json:', e);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.on('log-error', (event, errorText) => {
   const fs = require('fs');
   const logFile = path.join(__dirname, 'backend.log');

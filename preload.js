@@ -13,5 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCloseToTrayFlag: () => ipcRenderer.invoke('get-close-to-tray'),
   setShowMenuBarFlag: (show) => ipcRenderer.invoke('set-show-menu-bar', show),
   getShowMenuBarFlag: () => ipcRenderer.invoke('get-show-menu-bar'),
-  writeMqttLog: (content) => ipcRenderer.invoke('write-mqtt-log', content)
+  writeMqttLog: (content) => ipcRenderer.invoke('write-mqtt-log', content),
+  saveSystemConfig: (configData) => ipcRenderer.invoke('save-system-config', configData),
+  loadSystemConfig: () => ipcRenderer.invoke('load-system-config')
 });

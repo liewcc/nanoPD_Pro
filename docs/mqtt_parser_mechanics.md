@@ -72,6 +72,6 @@ If no tags are found at all, the parser assigns indices sequentially based on th
 
 ## 4. Bus Quiet-Period Postponement
 
-To prevent queries from taking the DTU out of transparent mode and causing physical丟包 (packet loss) on the RS485 bus, we defer signal queries (`query_csq`) via `postponeCellAutoCsqPolling()`.
+To prevent queries from taking the DTU out of transparent mode and causing physical packet loss on the RS485 bus, we defer signal queries (`query_csq`) via `postponeCellAutoCsqPolling()`.
 
 When any data is received on the DTU connection (`cellSocket`) or Modbus port (`cellModbusSocket`), the CSQ timer is reset from zero. This guarantees that `AT+CSQ` is only sent to the DTU after a quiet period has elapsed with no RS485 or cellular transmission activity.

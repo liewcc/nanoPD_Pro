@@ -10,5 +10,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setHideCliFlag: (hide) => ipcRenderer.invoke('set-hide-cli', hide),
   getHideCliFlag: () => ipcRenderer.invoke('get-hide-cli'),
   setCloseToTrayFlag: (enable) => ipcRenderer.invoke('set-close-to-tray', enable),
-  getCloseToTrayFlag: () => ipcRenderer.invoke('get-close-to-tray')
+  getCloseToTrayFlag: () => ipcRenderer.invoke('get-close-to-tray'),
+  setShowMenuBarFlag: (show) => ipcRenderer.invoke('set-show-menu-bar', show),
+  getShowMenuBarFlag: () => ipcRenderer.invoke('get-show-menu-bar'),
+  writeMqttLog: (content) => ipcRenderer.invoke('write-mqtt-log', content)
 });

@@ -162,6 +162,13 @@ async function createWindow() {
     }
   });
 
+  // Hide native menu bar by default unless show_menu_bar.flag exists
+  const fs = require('fs');
+  const showMenuFlagPath = path.join(__dirname, 'show_menu_bar.flag');
+  if (!fs.existsSync(showMenuFlagPath)) {
+    mainWindow.removeMenu();
+  }
+
   // Create System Tray
   createTray(iconPath);
 
@@ -192,6 +199,29 @@ async function createWindow() {
 
 ipcMain.handle('get-port', () => {
   return backendPort;
+});
+
+ipcMain.handle('set-show-menu-bar', (event, show) => {
+  const fs = require('fs');
+  const flagPath = path.join(__dirname, 'show_menu_bar.flag');
+  if (show) {
+    fs.writeFileSync(flagPath, 'true');
+  } else {
+    try {
+      if (fs.existsSync(flagPath)) {
+        fs.unlinkSync(flagPath);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  return true;
+});
+
+ipcMain.handle('get-show-menu-bar', () => {
+  const fs = require('fs');
+  const flagPath = path.join(__dirname, 'show_menu_bar.flag');
+  return fs.existsSync(flagPath);
 });
 
 ipcMain.handle('set-hide-cli', (event, hide) => {
@@ -238,6 +268,22 @@ ipcMain.handle('get-close-to-tray', () => {
   const fs = require('fs');
   const flagPath = path.join(__dirname, 'close_to_tray.flag');
   return fs.existsSync(flagPath);
+});
+
+ipcMain.handle('write-mqtt-log', (event, content) => {
+  const fs = require('fs');
+  const dataDir = path.join(__dirname, 'data');
+  const logPath = path.join(dataDir, 'mqtt.log');
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    fs.writeFileSync(logPath, content, 'utf8');
+    return { ok: true, path: logPath };
+  } catch (e) {
+    console.error('[Main] Failed to write mqtt.log:', e);
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.on('log-error', (event, errorText) => {

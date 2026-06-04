@@ -8,6 +8,15 @@ This guide walks you through the automatic setup and execution process step-by-s
 
 ---
 
+## 📚 Documentation Index
+
+- [Setup & Run Instructions](#⚙️-step-1-download-and-extract-the-project)
+- [Project Structure Overview](#📂-project-structure-overview)
+- [Troubleshooting & FAQ](#⚠️-troubleshooting--faq)
+- [Internet MQTT Parser Mechanics](./docs/mqtt_parser_mechanics.md) - *Detailed explanation of the parser pipeline, tag resolution, and alignment correction algorithms.*
+
+---
+
 ## ⚙️ Step 1: Download and Extract the Project
 
 Before setting up the environment, you need to download the repository files to your local machine:

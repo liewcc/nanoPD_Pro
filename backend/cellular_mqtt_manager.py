@@ -254,7 +254,8 @@ def read_hw_state(ser, log_cb=None) -> dict:
     resp = _send_and_wait(ser, b'AT+TASKMD\r\n', 1.0, log_cb)
     parsed = parse_slot_response(resp, "+TASKMD")
     if parsed:
-        state["task_mode"] = parsed[0].upper()
+        val = parsed[0].upper()
+        state["task_mode"] = "MODBUS" if val == "USER" else val
 
     resp = _send_and_wait(ser, b'AT+TASKTIME\r\n', 1.0, log_cb)
     parsed = parse_slot_response(resp, "+TASKTIME")
@@ -377,7 +378,18 @@ def apply_uart(ser, log_cb, baud, stop, data, parity):
 
 def apply_polling(ser, log_cb, task_mode, cycle, interval, identifier_en, identifier_format, command_list):
     """Apply Modbus Polling parameters and task lists."""
-    _send_and_wait(ser, f'AT+TASKMD="{task_mode}"\r\n'.encode('utf-8'), 1.0, log_cb)
+    dtu_task_mode = "USER" if task_mode == "MODBUS" else task_mode
+    _send_and_wait(ser, f'AT+TASKMD="{dtu_task_mode}"\r\n'.encode('utf-8'), 1.0, log_cb)
+    time.sleep(0.2)
+    
+    # Configure advanced parameters to align with D60 configuration software steps
+    _send_and_wait(ser, b'AT+MQTTFLT="OFF"\r\n', 1.0, log_cb)
+    time.sleep(0.2)
+    _send_and_wait(ser, b'AT+TASKDEV="D4X"\r\n', 1.0, log_cb)
+    time.sleep(0.2)
+    _send_and_wait(ser, b'AT+TASKCOMBNUM="20"\r\n', 1.0, log_cb)
+    time.sleep(0.2)
+    _send_and_wait(ser, b'AT+MODBUSPOLLNUM="0"\r\n', 1.0, log_cb)
     time.sleep(0.2)
     
     if cycle is not None and interval is not None:

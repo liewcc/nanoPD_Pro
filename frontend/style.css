@@ -531,7 +531,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 15px;
   box-shadow: var(--shadow);
   color: var(--text-main);
   font-family: var(--font-sans);
@@ -606,6 +606,10 @@ body {
   background-color: hsla(350, 80%, 55%, 0.12);
   color: hsl(350, 85%, 60%) !important;
   border: 1px solid hsla(350, 80%, 55%, 0.25);
+}
+
+.mqtt-status.conn-badge-disconnected {
+  display: none !important;
 }
 
 .conn-badge-occupied {
@@ -742,7 +746,7 @@ input:checked + .slider:before {
   gap: 16px;
   flex-grow: 1;
   min-height: 0;
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .com-tool-panel-left {
@@ -750,7 +754,7 @@ input:checked + .slider:before {
   min-width: 280px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 15px;
   box-sizing: border-box;
 }
 
@@ -989,6 +993,71 @@ input:checked + .slider:before {
   border-color: var(--text-muted);
 }
 
+.btn-copy-save {
+  background-color: transparent;
+  color: hsl(185, 70%, 55%);
+  border: 1px solid hsl(185, 50%, 35%);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+  outline: none;
+  font-family: var(--font-sans);
+  margin-left: 6px;
+}
+
+.btn-copy-save:hover {
+  background-color: hsla(185, 70%, 55%, 0.1);
+  color: hsl(185, 80%, 65%);
+  border-color: hsl(185, 70%, 55%);
+}
+
+.btn-copy-save:active {
+  background-color: hsla(185, 70%, 55%, 0.2);
+  transform: scale(0.97);
+}
+
+.btn-copy-save.saved-flash {
+  background-color: hsla(142, 70%, 50%, 0.15);
+  color: hsl(142, 75%, 45%);
+  border-color: hsl(142, 60%, 40%);
+}
+
+.btn-copy-icon {
+  background-color: transparent;
+  color: hsl(185, 70%, 55%);
+  border: 1px solid hsl(185, 50%, 35%);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: var(--transition);
+  outline: none;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-copy-icon:hover {
+  background-color: hsla(185, 70%, 55%, 0.1);
+  color: hsl(185, 80%, 65%);
+  border-color: hsl(185, 70%, 55%);
+}
+
+.btn-copy-icon:active {
+  background-color: hsla(185, 70%, 55%, 0.2);
+  transform: scale(0.97);
+}
+
+.btn-copy-icon.copied-flash {
+  background-color: hsla(142, 70%, 50%, 0.15);
+  color: hsl(142, 75%, 45%);
+  border-color: hsl(142, 60%, 40%);
+}
+
 .console-body {
   flex-grow: 1;
   background-color: #0c0c0d;
@@ -1077,7 +1146,7 @@ input:checked + .slider:before {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
-  margin-bottom: 12px;
+  margin-bottom: 15px;
   flex-shrink: 0;
 }
 
@@ -1225,7 +1294,11 @@ input:checked + .slider:before {
 }
 
 .radio-tile-btn input[type="radio"] {
-  display: none;
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
 }
 
 .radio-tile-btn:has(input:checked) {
@@ -1462,6 +1535,16 @@ input:checked + .slider:before {
   height: calc(100% - 60px);
 }
 
+#view-mqtt .com-tool-panel-left {
+  width: 40%;
+  height: 100%;
+  min-height: 0;
+}
+
+#view-mqtt .com-tool-panel-right {
+  width: 60%;
+}
+
 /* Parent stationary card structure for left panel configuration */
 .com-left-card-parent {
   height: 100%;
@@ -1472,7 +1555,7 @@ input:checked + .slider:before {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 15px;
   min-height: 0;
 }
 
@@ -1481,7 +1564,7 @@ input:checked + .slider:before {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 15px;
   padding-right: 8px;
 }
 

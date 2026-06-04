@@ -24,12 +24,58 @@ displayPorts.forEach(el => el.innerText = backendPort);
 electronStatuses.forEach(el => el.className = 'job-status-badge conn-badge-connected electron-status'); // Electron is running
 
 // Navigation Handling
+function updateSidebarCsqCardVisibility() {
+  const card = document.getElementById('cell-auto-csq-card');
+  const crcCard = document.getElementById('crc-delay-card');
+  const debugCard = document.getElementById('debugging-tool-card');
+  const isMqttActive = navMqtt && navMqtt.classList.contains('active');
+  const isCellularActive = subTabBtnCellular && subTabBtnCellular.classList.contains('active');
+  
+  if (card) {
+    if (isMqttActive && isCellularActive) {
+      card.style.display = 'block';
+    } else {
+      card.style.display = 'none';
+    }
+  }
+  
+  if (crcCard) {
+    if (isMqttActive) {
+      crcCard.style.display = 'block';
+    } else {
+      crcCard.style.display = 'none';
+    }
+  }
+
+  if (debugCard) {
+    if (isMqttActive) {
+      debugCard.style.display = 'block';
+    } else {
+      debugCard.style.display = 'none';
+    }
+  }
+}
+
+// Initialize and save CRC Check Delay setting
+const crcDelayInput = document.getElementById('crc-check-delay');
+if (crcDelayInput) {
+  const savedDelay = localStorage.getItem('crc_check_delay');
+  if (savedDelay !== null) {
+    crcDelayInput.value = savedDelay;
+  }
+  crcDelayInput.addEventListener('change', () => {
+    localStorage.setItem('crc_check_delay', crcDelayInput.value);
+  });
+}
+
 function switchView(activeTab, targetPane) {
   [navDashboard, navMqtt, navSystemConfig].forEach(tab => tab && tab.classList.remove('active'));
   [viewDashboard, viewMqtt, viewSystemConfigPane].forEach(pane => pane && pane.classList.remove('active'));
 
   activeTab.classList.add('active');
   targetPane.classList.add('active');
+  
+  updateSidebarCsqCardVisibility();
 }
 
 if (navDashboard) navDashboard.addEventListener('click', () => switchView(navDashboard, viewDashboard));
@@ -195,6 +241,14 @@ function updateComPortDropdown(ports, details = {}) {
       session.setOffline();
     }
   }
+
+  // Update occupation status for all online sessions
+  activeSessions.forEach((session) => {
+    if (session.isOnline) {
+      const portInfo = details[session.portName] || {};
+      session.updateOccupationStatus(portInfo.occupied);
+    }
+  });
   
   // Show/hide tab bar and toggle placeholder based on whether we have any sessions
   if (activeSessions.size > 0) {
@@ -214,6 +268,50 @@ function updateComPortDropdown(ports, details = {}) {
   }
 }
 
+function rebuildComPortBadges(ports, details) {
+  const containers = document.querySelectorAll('.com-port-left');
+  const cards = document.querySelectorAll('.com-port-card');
+  
+  if (!ports || ports.length === 0) {
+    cards.forEach(card => card.className = 'com-port-card glass');
+    containers.forEach(container => container.innerHTML = '');
+    return;
+  }
+  
+  cards.forEach(card => card.className = 'com-port-card glass');
+  let html = '';
+  ports.forEach((port, idx) => {
+    const marginLeft = idx === 0 ? '0' : '8px';
+    const info = details[port] || {
+      port: port,
+      name: `Serial Port (${port})`,
+      manufacturer: "------",
+      vid: "------",
+      pid: "------",
+      ser: "------",
+      occupied: false
+    };
+    const badgeClass = info.occupied ? 'conn-badge-occupied' : 'conn-badge-connected';
+    const tooltipHeaderStyle = info.occupied ? 'color: var(--danger);' : '';
+    const occupiedText = info.occupied ? ' (Occupied)' : '';
+    
+    html += `
+      <span class="job-status-badge ${badgeClass} port-pill" style="margin-left: ${marginLeft};">
+        ${port}
+        <div class="port-tooltip">
+          <div class="tooltip-header" style="${tooltipHeaderStyle}">${info.port} - ${info.name}${occupiedText}</div>
+          <div class="tooltip-divider"></div>
+          <div class="tooltip-line"><span class="tooltip-lbl">MFR:</span><span class="tooltip-val">${info.manufacturer}</span></div>
+          <div class="tooltip-line"><span class="tooltip-lbl">VID:</span><span class="tooltip-val">${info.vid}</span></div>
+          <div class="tooltip-line"><span class="tooltip-lbl">PID:</span><span class="tooltip-val">${info.pid}</span></div>
+          <div class="tooltip-line"><span class="tooltip-lbl">SER:</span><span class="tooltip-val">${info.ser}</span></div>
+        </div>
+      </span>
+    `;
+  });
+  containers.forEach(container => container.innerHTML = html);
+}
+
 async function updateComPorts() {
   const containers = document.querySelectorAll('.com-port-left');
   const cards = document.querySelectorAll('.com-port-card');
@@ -231,44 +329,7 @@ async function updateComPorts() {
         lastPorts = ports;
         lastDetails = details;
         updateComPortDropdown(ports, details);
-        
-        if (ports.length === 0) {
-          cards.forEach(card => card.className = 'com-port-card glass');
-          containers.forEach(container => container.innerHTML = '');
-        } else {
-          cards.forEach(card => card.className = 'com-port-card glass');
-          let html = '';
-          ports.forEach((port, idx) => {
-            const marginLeft = idx === 0 ? '0' : '8px';
-            const info = details[port] || {
-              port: port,
-              name: `Serial Port (${port})`,
-              manufacturer: "------",
-              vid: "------",
-              pid: "------",
-              ser: "------",
-              occupied: false
-            };
-            const badgeClass = info.occupied ? 'conn-badge-occupied' : 'conn-badge-connected';
-            const tooltipHeaderStyle = info.occupied ? 'color: var(--danger);' : '';
-            const occupiedText = info.occupied ? ' (Occupied)' : '';
-            
-            html += `
-              <span class="job-status-badge ${badgeClass} port-pill" style="margin-left: ${marginLeft};">
-                ${port}
-                <div class="port-tooltip">
-                  <div class="tooltip-header" style="${tooltipHeaderStyle}">${info.port} - ${info.name}${occupiedText}</div>
-                  <div class="tooltip-divider"></div>
-                  <div class="tooltip-line"><span class="tooltip-lbl">MFR:</span><span class="tooltip-val">${info.manufacturer}</span></div>
-                  <div class="tooltip-line"><span class="tooltip-lbl">VID:</span><span class="tooltip-val">${info.vid}</span></div>
-                  <div class="tooltip-line"><span class="tooltip-lbl">PID:</span><span class="tooltip-val">${info.pid}</span></div>
-                  <div class="tooltip-line"><span class="tooltip-lbl">SER:</span><span class="tooltip-val">${info.ser}</span></div>
-                </div>
-              </span>
-            `;
-          });
-          containers.forEach(container => container.innerHTML = html);
-        }
+        rebuildComPortBadges(ports, details);
       }
     } else {
       if (JSON.stringify(lastPorts) !== JSON.stringify([])) {
@@ -352,6 +413,117 @@ if (toggleCloseToTray && window.electronAPI && window.electronAPI.getCloseToTray
   });
 }
 
+// Toggle native menu bar logic
+const toggleMenuBar = document.getElementById('toggle-menu-bar');
+if (toggleMenuBar && window.electronAPI && window.electronAPI.getShowMenuBarFlag) {
+  // Load initial state (checked if flag exists, meaning show native menu bar)
+  window.electronAPI.getShowMenuBarFlag().then(show => {
+    toggleMenuBar.checked = show;
+  });
+
+  // Handle changes
+  toggleMenuBar.addEventListener('change', (e) => {
+    if (window.electronAPI.setShowMenuBarFlag) {
+      window.electronAPI.setShowMenuBarFlag(e.target.checked);
+    }
+  });
+}
+
+// ASCII force printing rules logic
+let asciiMatchRules = [];
+const asciiRulesBody = document.getElementById('ascii-rules-body');
+const inputAsciiRule = document.getElementById('input-ascii-rule');
+const btnAddAsciiRule = document.getElementById('btn-add-ascii-rule');
+
+function saveAsciiMatchRules() {
+  localStorage.setItem('ascii_match_rules', JSON.stringify(asciiMatchRules));
+}
+
+function rebuildAsciiMatchRulesUI() {
+  if (!asciiRulesBody) return;
+  asciiRulesBody.innerHTML = '';
+  if (asciiMatchRules.length === 0) {
+    asciiRulesBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted); font-style: italic;">No rules defined</td></tr>';
+    return;
+  }
+  asciiMatchRules.forEach((rule, idx) => {
+    const tr = document.createElement('tr');
+    const asciiPreview = hexToString(rule);
+    tr.innerHTML = `
+      <td style="color: var(--text-main); font-family: var(--font-mono); font-size: 11px; padding: 6px 8px;">${rule}</td>
+      <td style="color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; padding: 6px 8px;">${asciiPreview}</td>
+      <td style="text-align: center; vertical-align: middle;">
+        <button class="btn-remove-row btn-remove-ascii" data-index="${idx}" style="cursor: pointer; background: transparent; border: none; color: var(--danger);">✖</button>
+      </td>
+    `;
+    asciiRulesBody.appendChild(tr);
+  });
+  
+  // Attach remove handlers
+  asciiRulesBody.querySelectorAll('.btn-remove-ascii').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const idx = parseInt(e.target.getAttribute('data-index'));
+      asciiMatchRules.splice(idx, 1);
+      saveAsciiMatchRules();
+      rebuildAsciiMatchRulesUI();
+      // Rebuild consoles if open
+      if (typeof rebuildCellConsole === 'function') rebuildCellConsole();
+      if (typeof rebuildInetConsole === 'function') rebuildInetConsole();
+    });
+  });
+}
+
+if (btnAddAsciiRule && inputAsciiRule) {
+  btnAddAsciiRule.addEventListener('click', () => {
+    const ruleVal = inputAsciiRule.value.trim();
+    if (!ruleVal) return;
+    
+    // Clean and validate hex string (only hex characters and spaces allowed)
+    const cleanRule = ruleVal.replace(/\s+/g, '');
+    if (!/^[0-9A-Fa-f]+$/.test(cleanRule)) {
+      alert('Invalid HEX string! Please enter only hexadecimal characters (0-9, A-F, a-f) and spaces.');
+      return;
+    }
+    
+    asciiMatchRules.push(ruleVal);
+    saveAsciiMatchRules();
+    inputAsciiRule.value = '';
+    rebuildAsciiMatchRulesUI();
+    
+    // Rebuild consoles if open
+    if (typeof rebuildCellConsole === 'function') rebuildCellConsole();
+    if (typeof rebuildInetConsole === 'function') rebuildInetConsole();
+  });
+  
+  inputAsciiRule.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      btnAddAsciiRule.click();
+    }
+  });
+}
+
+function loadAsciiMatchRules() {
+  const raw = localStorage.getItem('ascii_match_rules');
+  if (raw) {
+    try {
+      asciiMatchRules = JSON.parse(raw) || [];
+    } catch(e) {
+      asciiMatchRules = [];
+    }
+  } else {
+    // Default values: the hex notifications DTU sends
+    asciiMatchRules = [
+      "0D 0A 50 6C 65 61 73 65 20 63 68 65 63 6B 20 47 50 52 53 20 21 21 21 0D 0A",
+      "0D 0A 2B 41 54 4B 20 4D 6F 64 75 6C 65 20 57 69 6C 6C 20 52 65 73 74 61 72 74",
+      "41 54 4B 2D 4C 54 45 2D 44 54 55"
+    ];
+    saveAsciiMatchRules();
+  }
+  rebuildAsciiMatchRulesUI();
+}
+
+loadAsciiMatchRules();
+
 
 // Helper to format raw hex input with spaces between every byte pair
 function formatHexWithSpaces(hexStr) {
@@ -408,6 +580,56 @@ function stringToHex(str) {
     arr.push(hex);
   }
   return arr.join(' ');
+}
+
+// Check if raw data contains DTU notification messages (to be printed in ASCII regardless of hex mode)
+function isDtuNotification(str) {
+  if (typeof str !== 'string') return false;
+  return str.includes('Please check GPRS !!!') || 
+         str.includes('+ATK Module Will Restart:') || 
+         str.includes('ATK-LTE-DTU');
+}
+
+// Global function to determine if a string should be force printed as ASCII
+function shouldForceAscii(str) {
+  if (typeof str !== 'string') return false;
+  if (isDtuNotification(str)) return true;
+  
+  // Convert incoming text/bytes to clean lowercase hex
+  const cleanIncoming = stringToHex(str).replace(/\s+/g, '').toLowerCase();
+  if (!cleanIncoming) return false;
+  
+  // Check against user-defined hex rules
+  for (const rule of asciiMatchRules) {
+    const cleanRule = rule.replace(/\s+/g, '').toLowerCase();
+    if (cleanRule && cleanIncoming.includes(cleanRule)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Convert hex representation back to ASCII string (replacing common control codes with printable representations)
+function hexToString(hexStr) {
+  if (typeof hexStr !== 'string') return '';
+  const clean = hexStr.replace(/\s+/g, '');
+  if (!/^[0-9A-Fa-f]+$/.test(clean) || clean.length % 2 !== 0) return '';
+  let str = '';
+  for (let i = 0; i < clean.length; i += 2) {
+    const code = parseInt(clean.substring(i, i + 2), 16);
+    if (code === 13) {
+      str += '\\r';
+    } else if (code === 10) {
+      str += '\\n';
+    } else if (code === 9) {
+      str += '\\t';
+    } else if (code >= 32 && code <= 126) {
+      str += String.fromCharCode(code);
+    } else {
+      str += '.';
+    }
+  }
+  return str;
 }
 
 class SerialPortSession {
@@ -826,6 +1048,9 @@ class SerialPortSession {
         this.paritySelect.disabled = true;
         this.btnSerialSend.disabled = false;
         this.addSystemToConsole(`[System] Connected to ${port} successfully.`);
+        if (typeof markPortOccupationLocally === 'function') {
+          markPortOccupationLocally(port, true);
+        }
       };
       this.serialSocket.onmessage = (event) => {
         try {
@@ -853,6 +1078,9 @@ class SerialPortSession {
         this.btnSerialSend.disabled = true;
         this.addSystemToConsole(`[System] Disconnected.`);
         this.serialSocket = null;
+        if (typeof markPortOccupationLocally === 'function') {
+          markPortOccupationLocally(port, false);
+        }
       };
       this.serialSocket.onerror = (err) => {
         this.addSystemToConsole(`[System Error] WebSocket error occurred.`, true);
@@ -928,7 +1156,7 @@ class SerialPortSession {
     this.portName = info.port;
     this.comPortSelect.innerHTML = `<option value="${this.portName}">${this.portName}</option>`;
     this.comPortSelect.value = this.portName;
-    this.btnSerialConnect.disabled = false;
+    this.updateOccupationStatus(info.occupied);
     if (!this.serialSocket) {
       this.baudRateSelect.disabled = false;
       this.dataBitsSelect.disabled = false;
@@ -945,6 +1173,27 @@ class SerialPortSession {
       }
     }
     this.addSystemToConsole(`[System] Device ${this.portName} connected (hardware signatures matched).`);
+  }
+
+  updateOccupationStatus(occupied) {
+    const isConnected = this.serialSocket && (this.serialSocket.readyState === WebSocket.OPEN || this.serialSocket.readyState === WebSocket.CONNECTING);
+    if (!isConnected) {
+      if (occupied) {
+        this.btnSerialConnect.disabled = true;
+        this.btnSerialConnect.style.opacity = '0.6';
+        this.btnSerialConnect.title = `${this.portName} is occupied by another application or view.`;
+      } else {
+        if (this.isOnline) {
+          this.btnSerialConnect.disabled = false;
+        }
+        this.btnSerialConnect.style.opacity = '';
+        this.btnSerialConnect.title = '';
+      }
+    } else {
+      this.btnSerialConnect.disabled = false;
+      this.btnSerialConnect.style.opacity = '';
+      this.btnSerialConnect.title = '';
+    }
   }
 
   destroy() {
@@ -982,6 +1231,8 @@ function switchMqttSubTab(activeBtn, targetPane) {
   if (targetPane === panePerf) {
     drawPerformanceChart();
   }
+  
+  updateSidebarCsqCardVisibility();
 }
 
 if (subTabBtnInternet) subTabBtnInternet.addEventListener('click', () => switchMqttSubTab(subTabBtnInternet, paneInternet));
@@ -1113,6 +1364,7 @@ function saveInetSettings() {
 
 // Format a payload for display based on HEX mode
 function formatMqttPayload(rawPayload, hexMode) {
+  if (typeof rawPayload !== 'string') return '';
   if (hexMode) {
     return stringToHex(rawPayload);
   }
@@ -1229,6 +1481,400 @@ function tryParseModbusAt(bytes, offset, hint = 'auto') {
   return null;
 }
 
+function getKnownCommandRules() {
+  const rules = [];
+  
+  // 1. POLLING COMMANDS LIST
+  if (typeof getPollingListFromUI === 'function') {
+    const pollingList = getPollingListFromUI();
+    pollingList.forEach(item => {
+      const clean = item.Command.replace(/\s+/g, '').toUpperCase();
+      if (/^[0-9A-Fa-f]{6,}$/.test(clean) && clean.length % 2 === 0) {
+        const bytes = [];
+        for (let i = 0; i < clean.length; i += 2) {
+          bytes.push(parseInt(clean.substring(i, i + 2), 16));
+        }
+        rules.push({
+          bytes: bytes,
+          prefix: bytes.slice(0, -2),
+          reqLen: bytes.length,
+          index: item.Index  // 1-based index from POLLING COMMANDS LIST
+        });
+      }
+    });
+  }
+
+  // 2. Secondary COM Connection (MODBUS COMMAND HEX)
+  const secondaryCmdInput = document.getElementById('cell-modbus-fallback-cmd');
+  if (secondaryCmdInput) {
+    const clean = secondaryCmdInput.value.replace(/\s+/g, '').toUpperCase();
+    if (/^[0-9A-Fa-f]{6,}$/.test(clean) && clean.length % 2 === 0) {
+      const bytes = [];
+      for (let i = 0; i < clean.length; i += 2) {
+        bytes.push(parseInt(clean.substring(i, i + 2), 16));
+      }
+      const isDuplicate = rules.some(r => r.bytes.join(',') === bytes.join(','));
+      if (!isDuplicate) {
+        rules.push({
+          bytes: bytes,
+          prefix: bytes.slice(0, -2),
+          reqLen: bytes.length,
+          index: 'secondary'
+        });
+      }
+    }
+  }
+
+  // Sort rules by reqLen descending so we match the longest command first
+  rules.sort((a, b) => b.reqLen - a.reqLen);
+  return rules;
+}
+
+/**
+ * After the CRC-delay inactivity period, scan the entire accumulated byte buffer
+ * and identify Modbus request / response pairs based on known polling commands.
+ *
+ * Strategy:
+ *   Walk byte-by-byte. At each position, test whether any known command prefix
+ *   matches. If yes, extract the full request frame, then immediately look for
+ *   a matching response frame (same slave-id + FC). Log both with their INDEX.
+ *   If the byte doesn't start any known frame, skip it and continue.
+ */
+const lastMatchedRuleIndices = {
+  inet: -1,
+  cell: -1
+};
+
+function getExpectedResponseLength(ruleBytes) {
+  if (!ruleBytes || ruleBytes.length < 6) return 0;
+  const fc = ruleBytes[1];
+  if (fc >= 0x01 && fc <= 0x04) {
+    const qty = (ruleBytes[4] << 8) | ruleBytes[5];
+    if (fc === 0x01 || fc === 0x02) {
+      const byteCount = Math.ceil(qty / 8);
+      return 3 + byteCount + 2;
+    } else { // 0x03 or 0x04
+      const byteCount = qty * 2;
+      return 3 + byteCount + 2;
+    }
+  }
+  if (fc === 0x05 || fc === 0x06 || fc === 0x0F || fc === 0x10) {
+    return 8;
+  }
+  return 0;
+}
+
+function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
+  if (!buf || buf.length === 0) return;
+
+  lastMatchedRuleIndices[consoleType] = -1;
+  const consumedTagOffsets = new Set();
+  const rules = getKnownCommandRules();
+  if (rules.length === 0) {
+    addLogToConsole(consoleBody, '[Modbus CRC] Analysis aborted: Polling Commands List is not configured.', 'system', timeTagEnabled);
+    return;
+  }
+
+  // Sort rules by index to match their polling sequence order
+  const rulesBySeq = [...rules].sort((a, b) => {
+    const idxA = (a.index !== undefined && a.index !== 'secondary') ? a.index : 9999;
+    const idxB = (b.index !== undefined && b.index !== 'secondary') ? b.index : 9999;
+    return idxA - idxB;
+  });
+
+  // ─── Internet MQTT: Pre-process buffer to strip embedded <N> index tags ───
+  let tagIndexAtCleanOffset = {}; // cleanedOffset → parsedIndex (1-based)
+  if (consoleType === 'inet') {
+    const cleaned = [];
+    let i = 0;
+    while (i < buf.length) {
+      if (buf[i] === 0x3C) {
+        // Potential start of <N> tag — peek ahead for digits then 0x3E
+        let j = i + 1;
+        while (j < buf.length && buf[j] >= 0x30 && buf[j] <= 0x39) j++;
+        if (j > i + 1 && j < buf.length && buf[j] === 0x3E) {
+          // Valid <N> tag found: decode N and record at the current cleaned position
+          const digits = buf.slice(i + 1, j).map(b => String.fromCharCode(b)).join('');
+          const parsedN = parseInt(digits, 10);
+          if (!isNaN(parsedN)) {
+            tagIndexAtCleanOffset[cleaned.length] = parsedN;
+          }
+          i = j + 1; // skip past '>'
+          continue;
+        }
+      }
+      cleaned.push(buf[i]);
+      i++;
+    }
+    buf = cleaned; // replace buf with the tag-stripped version
+  }
+
+  let offset = 0;
+  let matchCount = 0;
+
+  while (offset < buf.length) {
+    // 1. Try to match a known request rule via prefix (standard request/response pair)
+    let matchedRule = null;
+    for (const rule of rules) {
+      const prefix = rule.prefix;
+      if (offset + prefix.length <= buf.length) {
+        let hit = true;
+        for (let b = 0; b < prefix.length; b++) {
+          if (buf[offset + b] !== prefix[b]) { hit = false; break; }
+        }
+        if (hit) { matchedRule = rule; break; }
+      }
+    }
+
+    if (matchedRule) {
+      const { reqLen, index: ruleIndex, prefix } = matchedRule;
+      if (offset + reqLen <= buf.length) {
+        const reqFrame = buf.slice(offset, offset + reqLen);
+        logModbusAnalysis(consoleBody, reqFrame, 'request', timeTagEnabled, consoleType, ruleIndex);
+        matchCount++;
+
+        // Update sequence state tracking
+        const seqIdx = rulesBySeq.indexOf(matchedRule);
+        if (seqIdx !== -1) {
+          lastMatchedRuleIndices[consoleType] = seqIdx;
+        }
+
+        let advance = reqLen;
+
+        // Try to match corresponding response immediately following the request
+        const respStart = offset + reqLen;
+        if (respStart + 2 <= buf.length) {
+          const rSlaveId = buf[respStart];
+          const rFc     = buf[respStart + 1];
+          const reqSlaveId = prefix[0];
+          const reqFc     = prefix[1];
+
+          if (rSlaveId === reqSlaveId && (rFc === reqFc || rFc === (reqFc | 0x80))) {
+            let respLen = 0;
+            if (rFc & 0x80) {
+              respLen = 5;
+            } else if (rFc >= 0x01 && rFc <= 0x04) {
+              if (respStart + 3 <= buf.length) {
+                respLen = 3 + buf[respStart + 2] + 2;
+              }
+            } else if (rFc === 0x05 || rFc === 0x06 || rFc === 0x0F || rFc === 0x10) {
+              respLen = 8;
+            }
+
+            if (respLen > 0 && respStart + respLen <= buf.length) {
+              const respFrame = buf.slice(respStart, respStart + respLen);
+              // Verify response CRC
+              const bodyLen = respFrame.length - 2;
+              const calcCrc = crc16Modbus(respFrame.slice(0, bodyLen));
+              const recCrc = respFrame[bodyLen] | (respFrame[bodyLen + 1] << 8);
+              if (calcCrc === recCrc) {
+                logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, ruleIndex);
+                advance += respLen;
+              }
+            }
+          }
+        }
+
+        offset += advance;
+        continue;
+      }
+    }
+
+    // 2. Standalone response check (useful when requests are not visible in the stream)
+    const parsedResp = tryParseModbusAt(buf, offset, 'response');
+    if (parsedResp) {
+      const respFrame = parsedResp.frame;
+      const isErrResp = (respFrame[1] & 0x80) !== 0;
+      const fcTarget = respFrame[1] & 0x7F;
+
+      // Find all polling rules compatible with this response structure
+      const candidateRules = rulesBySeq.filter(r => {
+        const rSlaveId = r.bytes[0];
+        const rFc = r.bytes[1];
+        const expLen = isErrResp ? 5 : getExpectedResponseLength(r.bytes);
+        return rSlaveId === respFrame[0] && rFc === fcTarget && expLen === respFrame.length;
+      });
+
+      let chosenRule = null;
+
+      // Priority 1 (Internet MQTT only): use the pre-built tag-offset map.
+      // The pre-processor stripped all <N> tags from buf and recorded the cleaned-buffer
+      // offset where each tag appeared.
+      //
+      // Semantic: <N> is a boundary marker inserted by the DTU when it transitions to
+      // polling command N.  A response frame that starts at or after <N> (but before
+      // <N+1>) belongs to index N.
+      //
+      // Critical rule: search for any unconsumed tag on or inside the frame first. If not found,
+      // fall back to the closest unconsumed tag before the frame. Combine this with sequence guidance
+      // to resolve lagging/alignment.
+      if (consoleType === 'inet' && Object.keys(tagIndexAtCleanOffset).length > 0) {
+        const tagOffsets = Object.keys(tagIndexAtCleanOffset).map(Number).sort((a, b) => a - b);
+        
+        // Determine the next expected polling sequence index (1-20 wrap-around)
+        let expectedIndex = 1;
+        if (lastMatchedRuleIndices[consoleType] !== -1) {
+          const lastRule = rulesBySeq[lastMatchedRuleIndices[consoleType]];
+          if (lastRule && lastRule.index !== undefined && lastRule.index !== 'secondary') {
+            expectedIndex = (Number(lastRule.index) % 20) + 1;
+          }
+        }
+
+        // 1. Search for an unconsumed tag on or inside the current response frame
+        let bestTagOffset = -1;
+        for (const to of tagOffsets) {
+          if (to >= offset && to < offset + respFrame.length && !consumedTagOffsets.has(to)) {
+            bestTagOffset = to;
+            break; // Use the first tag found inside the frame
+          }
+        }
+
+        // 2. Fallback to the closest unconsumed tag before the frame
+        if (bestTagOffset === -1) {
+          for (const to of tagOffsets) {
+            if (to < offset && !consumedTagOffsets.has(to)) {
+              bestTagOffset = to;
+            } else if (to >= offset) {
+              break;
+            }
+          }
+        }
+
+        if (bestTagOffset >= 0) {
+          // Mark this tag and all prior tags as consumed to prevent them from matching future frames
+          for (const to of tagOffsets) {
+            if (to <= bestTagOffset) {
+              consumedTagOffsets.add(to);
+            }
+          }
+          const tagN = tagIndexAtCleanOffset[bestTagOffset];
+          
+          // Normalize tagN for wrap-around sequence tracking
+          let normalizedTag = tagN;
+          if (expectedIndex > 15 && tagN < 5) {
+            normalizedTag = tagN + 20;
+          }
+
+          // If the normalized tag is greater than expectedIndex, it is a lagged tag.
+          // Map it back to N-1 (which maps to expectedIndex or intermediate skipped command).
+          let resolvedIndex = normalizedTag;
+          if (normalizedTag === expectedIndex + 1) {
+            resolvedIndex = normalizedTag - 1;
+          }
+
+          if (resolvedIndex > 20) {
+            resolvedIndex -= 20;
+          }
+
+          chosenRule = candidateRules.find(r => r.index !== undefined && r.index !== 'secondary' && Number(r.index) === resolvedIndex) || null;
+          if (chosenRule) {
+            const seqIdx = rulesBySeq.indexOf(chosenRule);
+            if (seqIdx !== -1) lastMatchedRuleIndices[consoleType] = seqIdx;
+          }
+        }
+      }
+
+      // Priority 2: scan bytes immediately before offset for inline <N> / [N] / N: prefix
+      // (used by non-inet consoles or when tagIndexAtCleanOffset map is empty)
+      if (!chosenRule) {
+        let parsedIndex = null;
+        if (offset >= 3) {
+          if (buf[offset - 1] === 0x3E) { // '>'
+            let idxStart = offset - 2;
+            while (idxStart >= 0 && buf[idxStart] >= 0x30 && buf[idxStart] <= 0x39) idxStart--;
+            if (idxStart >= 0 && buf[idxStart] === 0x3C) {
+              const digits = buf.slice(idxStart + 1, offset - 1).map(b => String.fromCharCode(b)).join('');
+              const val = parseInt(digits, 10);
+              if (!isNaN(val)) parsedIndex = val;
+            }
+          }
+          if (parsedIndex === null && buf[offset - 1] === 0x5D) { // ']'
+            let idxStart = offset - 2;
+            while (idxStart >= 0 && buf[idxStart] >= 0x30 && buf[idxStart] <= 0x39) idxStart--;
+            if (idxStart >= 0 && buf[idxStart] === 0x5B) {
+              const digits = buf.slice(idxStart + 1, offset - 1).map(b => String.fromCharCode(b)).join('');
+              const val = parseInt(digits, 10);
+              if (!isNaN(val)) parsedIndex = val;
+            }
+          }
+          if (parsedIndex === null && buf[offset - 1] === 0x3A) { // ':'
+            let idxStart = offset - 2;
+            while (idxStart >= 0 && buf[idxStart] >= 0x30 && buf[idxStart] <= 0x39) idxStart--;
+            if (idxStart < offset - 2) {
+              const digits = buf.slice(idxStart + 1, offset - 1).map(b => String.fromCharCode(b)).join('');
+              const val = parseInt(digits, 10);
+              if (!isNaN(val)) parsedIndex = val;
+            }
+          }
+        }
+        if (parsedIndex !== null) {
+          chosenRule = candidateRules.find(r => r.index !== undefined && r.index.toString() === parsedIndex.toString()) || null;
+          if (chosenRule) {
+            const seqIdx = rulesBySeq.indexOf(chosenRule);
+            if (seqIdx !== -1) lastMatchedRuleIndices[consoleType] = seqIdx;
+          }
+        }
+      }
+
+      // Priority 3: no tag available — assign by sequential counter (uniform-length) or state-tracking
+      if (!chosenRule && candidateRules.length > 0) {
+        const allSameLength = candidateRules.every(r =>
+          getExpectedResponseLength(r.bytes) === getExpectedResponseLength(candidateRules[0].bytes)
+        );
+        if (allSameLength) {
+          const posInCandidates = matchCount % candidateRules.length;
+          chosenRule = candidateRules[posInCandidates] || candidateRules[0];
+          const seqIdx = rulesBySeq.indexOf(chosenRule);
+          if (seqIdx !== -1) lastMatchedRuleIndices[consoleType] = seqIdx;
+        } else {
+          const candidatesWithSeqIdx = candidateRules.map(r => ({ rule: r, seqIdx: rulesBySeq.indexOf(r) }));
+          candidatesWithSeqIdx.sort((a, b) => a.seqIdx - b.seqIdx);
+          const lastIdx = lastMatchedRuleIndices[consoleType];
+          const nextCandidate = candidatesWithSeqIdx.find(c => c.seqIdx > lastIdx) || candidatesWithSeqIdx[0];
+          chosenRule = nextCandidate.rule;
+          lastMatchedRuleIndices[consoleType] = nextCandidate.seqIdx;
+        }
+      }
+
+      logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
+      matchCount++;
+      offset += parsedResp.len;
+      continue;
+    }
+
+
+    // 3. Standalone request check
+    const parsedReq = tryParseModbusAt(buf, offset, 'request');
+    if (parsedReq) {
+      const reqFrame = parsedReq.frame;
+      const candidateRules = rulesBySeq.filter(r => {
+        return r.bytes.length === reqFrame.length && r.bytes.every((b, i) => b === reqFrame[i]);
+      });
+
+      let chosenRule = null;
+      if (candidateRules.length > 0) {
+        chosenRule = candidateRules[0];
+        const seqIdx = rulesBySeq.indexOf(chosenRule);
+        if (seqIdx !== -1) {
+          lastMatchedRuleIndices[consoleType] = seqIdx;
+        }
+      }
+
+      logModbusAnalysis(consoleBody, reqFrame, 'request', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
+      matchCount++;
+      offset += parsedReq.len;
+      continue;
+    }
+
+    // 4. Slide window forward
+    offset++;
+  }
+
+  if (matchCount === 0) {
+    addLogToConsole(consoleBody, `[Modbus CRC] No matching Polling command found in ${buf.length} bytes. Please check if Polling Commands List matches the actual transmitted commands.`, 'system', timeTagEnabled);
+  }
+}
+
 /**
  * Bytes array → compact uppercase hex string (no spaces)
  */
@@ -1245,9 +1891,17 @@ function bytesToHexSpaced(bytes) {
 
 
 // Log a simplified Modbus analysis result (CRC Status only)
-function logModbusAnalysis(consoleBody, frame, frameType, timeTagEnabled, consoleType) {
+// ruleIndex: 1-based index from POLLING COMMANDS LIST, or undefined for secondary COM entries.
+function logModbusAnalysis(consoleBody, frame, frameType, timeTagEnabled, consoleType, ruleIndex) {
   const isRequest = (frameType === 'request');
-  const label = isRequest ? '[MODBUS REQUEST]' : '[MODBUS RESPOND]';
+  const baseLabel = isRequest ? '[MODBUS REQUEST]' : '[MODBUS RESPOND]';
+  let indexSuffix = '';
+  if (ruleIndex === 'secondary') {
+    indexSuffix = ' [SECONDARY]';
+  } else if (ruleIndex !== undefined && ruleIndex !== null) {
+    indexSuffix = ` [INDEX: ${ruleIndex}]`;
+  }
+  const label = baseLabel + indexSuffix;
   
   // Calculate CRC to verify
   const bodyLen = frame.length - 2;
@@ -1281,155 +1935,120 @@ function logModbusAnalysis(consoleBody, frame, frameType, timeTagEnabled, consol
   }
 }
 
-// ── Cellular stream buffer (accumulates raw bytes from << messages) ──────────
-let cellModbusBuffer = [];           // byte array
-let cellLastSentFrame = null;        // last TX command bytes (Array)
+// ── Cellular Modbus CRC accumulator ──────────────────────────────────────────
+// All bytes received from the DTU port are appended here, block by block.
+// Once Modbus activity stops for longer than the configured CRC Delay,
+// the entire accumulated buffer is passed to analyzeBufferedModbus() in one shot.
+let cellCrcAccumulator = [];
+let cellCrcTimer = null;
 
 /**
- * Called when user sends a TX command (Modbus Publish or console send with hex).
- * Stores the raw bytes of the sent frame for later matching.
+ * Core accumulation function.
+ * Appends newBytes to cellCrcAccumulator and resets the inactivity timer.
+ * Call this for EVERY chunk of bytes that arrives (RX or TX echo).
  */
-function cellRecordSentFrame(hexStr) {
-  const clean = hexStr.replace(/\s+/g, '');
-  if (!/^[0-9A-Fa-f]+$/.test(clean) || clean.length % 2 !== 0) return;
-  cellLastSentFrame = [];
-  for (let i = 0; i < clean.length; i += 2) {
-    cellLastSentFrame.push(parseInt(clean.substring(i, i + 2), 16));
+function cellPushToAccumulator(newBytes) {
+  if (!newBytes || newBytes.length === 0) return;
+
+  // Append to the running buffer
+  for (let i = 0; i < newBytes.length; i++) cellCrcAccumulator.push(newBytes[i]);
+  if (cellCrcAccumulator.length > 16384) {
+    cellCrcAccumulator = cellCrcAccumulator.slice(-16384);
   }
+
+  // (Re-)start the inactivity timer
+  if (cellCrcTimer) clearTimeout(cellCrcTimer);
+  const delayEl = document.getElementById('crc-check-delay');
+  const delaySec = delayEl ? parseFloat(delayEl.value) : 10;
+  const delayMs  = (isNaN(delaySec) || delaySec <= 0) ? 10000 : delaySec * 1000;
+
+  cellCrcTimer = setTimeout(() => {
+    // Take a snapshot and clear the accumulator before analysis
+    // so new incoming bytes start a fresh session.
+    const snapshot = cellCrcAccumulator.slice();
+    cellCrcAccumulator = [];
+    const timeTagEnabled = chkCellTimeTag ? chkCellTimeTag.checked : true;
+    analyzeBufferedModbus(snapshot, cellConsoleBody, timeTagEnabled, 'cell');
+  }, delayMs);
 }
 
 /**
- * Push new raw bytes into the cellular buffer and try to parse frames.
- * Returns array of analysis strings to display as [System] lines.
+ * Called by the RX handler for every data message received from the DTU.
+ * Forwards bytes to the shared accumulator when CRC checking is enabled.
  */
 function cellAnalyzeBuffer(newBytes, consoleBody, crcEnabled, timeTagEnabled) {
   if (!crcEnabled) return;
+  cellPushToAccumulator(newBytes);
+}
 
-  cellModbusBuffer.push(...newBytes);
-  // Cap buffer to avoid memory growth
-  if (cellModbusBuffer.length > 512) {
-    cellModbusBuffer = cellModbusBuffer.slice(-512);
-  }
-
-  let buf = cellModbusBuffer;
-  let offset = 0;
-
-  while (offset < buf.length) {
-    let isCommandEcho = false;
-    let cmdLen = 0;
-    
-    // Check if buf starts with (or contains near start) our command frame
-    if (cellLastSentFrame && cellLastSentFrame.length >= 4) {
-      const remainingBytes = buf.length - offset;
-      if (remainingBytes >= cellLastSentFrame.length) {
-        let match = true;
-        for (let j = 0; j < cellLastSentFrame.length; j++) {
-          if (buf[offset + j] !== cellLastSentFrame[j]) {
-            match = false;
-            break;
-          }
-        }
-        if (match) {
-          isCommandEcho = true;
-          cmdLen = cellLastSentFrame.length;
-        }
-      } else {
-        // The buffer ends with a partial match of the command echo.
-        // We should wait for more bytes to confirm.
-        let partialMatch = true;
-        for (let j = 0; j < remainingBytes; j++) {
-          if (buf[offset + j] !== cellLastSentFrame[j]) {
-            partialMatch = false;
-            break;
-          }
-        }
-        if (partialMatch) {
-          break; // wait for more bytes
-        }
-      }
-    }
-
-    if (isCommandEcho) {
-      const cmdFrame = buf.slice(offset, offset + cmdLen);
-      logModbusAnalysis(consoleBody, cmdFrame, 'request', timeTagEnabled, 'cell');
-      offset += cmdLen;
-      // Clear last sent frame since we matched and logged it
-      cellLastSentFrame = null;
-    } else {
-      // Scan for any Modbus frame
-      const parsed = tryParseModbusAt(buf, offset, 'auto');
-      if (parsed) {
-        logModbusAnalysis(consoleBody, parsed.frame, parsed.type, timeTagEnabled, 'cell');
-        offset += parsed.len;
-      } else {
-        // If we can't parse a frame, check if it's incomplete or invalid
-        const { len } = modbusFrameLength(buf, offset, 'auto') || {};
-        if (len === -1) {
-          // Incomplete frame at the end of the buffer: stop and wait for more data
-          break;
-        }
-        // Invalid byte: skip it
-        offset++;
-      }
-    }
-  }
-
-  // Clear consumed bytes
-  if (offset > 0) {
-    cellModbusBuffer = buf.slice(offset);
-  }
+/**
+ * Called when the user manually sends a TX command (hex string).
+ * Adds the sent bytes to the accumulator so request + response are analysed
+ * together — useful when the DTU does NOT echo TX back as RX.
+ */
+function cellRecordSentFrame(hexStr) {
+  const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+  if (!crcEnabled) return;
+  const clean = hexStr.replace(/\s+/g, '');
+  if (!/^[0-9A-Fa-f]+$/.test(clean) || clean.length % 2 !== 0) return;
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 2) bytes.push(parseInt(clean.substring(i, i + 2), 16));
+  cellPushToAccumulator(bytes);
 }
 
 // ── Internet MQTT fragment buffer (accumulates hex payload bytes) ─────────────
-let inetModbusBuffer = [];   // byte array assembled from hex fragments
+let inetCrcAccumulator = [];
+let inetCrcTimer = null;
+
+function inetPushToAccumulator(newBytes) {
+  if (!newBytes || newBytes.length === 0) return;
+
+  for (let i = 0; i < newBytes.length; i++) inetCrcAccumulator.push(newBytes[i]);
+  if (inetCrcAccumulator.length > 16384) {
+    inetCrcAccumulator = inetCrcAccumulator.slice(-16384);
+  }
+
+  if (inetCrcTimer) clearTimeout(inetCrcTimer);
+  const delayEl = document.getElementById('crc-check-delay');
+  const delaySec = delayEl ? parseFloat(delayEl.value) : 10;
+  const delayMs  = (isNaN(delaySec) || delaySec <= 0) ? 10000 : delaySec * 1000;
+
+  inetCrcTimer = setTimeout(() => {
+    const snapshot = inetCrcAccumulator.slice();
+    inetCrcAccumulator = [];
+    const timeTagEnabled = chkInetTimeTag ? chkInetTimeTag.checked : true;
+    analyzeBufferedModbus(snapshot, inetConsoleBody, timeTagEnabled, 'inet');
+  }, delayMs);
+}
 
 /**
- * Called for each RX payload on the inet console.
- * Payload may be a latin-1 binary string or a hex string.
+ * Called for each RX/TX payload on the inet console.
+ * Uses Cellular MQTT Console's decoding method.
  */
-function inetAnalyzePayload(rawPayload, consoleBody, crcEnabled, timeTagEnabled) {
+function inetAnalyzePayload(rawPayload, consoleBody, crcEnabled, timeTagEnabled, isIncoming = false) {
   if (!crcEnabled) return;
 
-  // Convert rawPayload to bytes
-  // If the payload looks like a hex string (compact or spaced), decode it
-  const stripped = rawPayload.replace(/\s+/g, '');
   let newBytes = [];
-  if (/^[0-9A-Fa-f]+$/.test(stripped) && stripped.length % 2 === 0 && stripped.length >= 4) {
-    for (let i = 0; i < stripped.length; i += 2) {
-      newBytes.push(parseInt(stripped.substring(i, i + 2), 16));
-    }
-  } else {
-    // Binary payload: take raw charCodes
+  if (isIncoming) {
+    // Received message from broker: decode using Cellular DTU RX method (raw charCodes)
     for (let i = 0; i < rawPayload.length; i++) {
       newBytes.push(rawPayload.charCodeAt(i) & 0xFF);
     }
-  }
-
-  inetModbusBuffer.push(...newBytes);
-  if (inetModbusBuffer.length > 512) {
-    inetModbusBuffer = inetModbusBuffer.slice(-512);
-  }
-
-  let offset = 0;
-  let buf = inetModbusBuffer;
-
-  // Try to scan for complete Modbus frames
-  while (offset < buf.length) {
-    const parsed = tryParseModbusAt(buf, offset, 'auto');
-    if (parsed) {
-      logModbusAnalysis(consoleBody, parsed.frame, parsed.type, timeTagEnabled, 'inet');
-      offset += parsed.len;
+  } else {
+    // Outgoing publish: follow Cellular DTU TX recording logic (hex or charCodes)
+    const clean = rawPayload.replace(/\s+/g, '');
+    if (/^[0-9A-Fa-f]+$/.test(clean) && clean.length % 2 === 0) {
+      for (let i = 0; i < clean.length; i += 2) {
+        newBytes.push(parseInt(clean.substring(i, i + 2), 16));
+      }
     } else {
-      // Check if we just need more data (incomplete frame at end)
-      const { len } = modbusFrameLength(buf, offset, 'auto') || {};
-      if (len === -1) break;   // wait for more bytes
-      offset++;                // skip unrecognised byte
+      for (let i = 0; i < rawPayload.length; i++) {
+        newBytes.push(rawPayload.charCodeAt(i) & 0xFF);
+      }
     }
   }
 
-  if (offset > 0) {
-    inetModbusBuffer = buf.slice(offset);
-  }
+  inetPushToAccumulator(newBytes);
 }
 
 function addLogToConsole(consoleBody, text, type = 'system', timeTagEnabled = true) {
@@ -1554,7 +2173,8 @@ function connectInetBroker() {
         } else if (msg.type === 'msg') {
           const hexMode = chkInetHexMode ? chkInetHexMode.checked : false;
           const crcEnabled = chkInetModbusCrc ? chkInetModbusCrc.checked : false;
-          const displayPayload = formatMqttPayload(msg.payload, hexMode);
+          const isNotify = shouldForceAscii(msg.payload);
+          const displayPayload = isNotify ? msg.payload : formatMqttPayload(msg.payload, hexMode);
           
           // Store raw for live re-rendering
           inetConsoleHistory.push({ type: 'recv', topic: msg.topic, rawPayload: msg.payload, timestamp: getFormattedTime() });
@@ -1570,7 +2190,7 @@ function connectInetBroker() {
           inetConsoleBody.appendChild(line);
           
           if (crcEnabled) {
-            inetAnalyzePayload(msg.payload, inetConsoleBody, crcEnabled, chkInetTimeTag && chkInetTimeTag.checked);
+            inetAnalyzePayload(msg.payload, inetConsoleBody, crcEnabled, chkInetTimeTag && chkInetTimeTag.checked, true);
           }
           
           if (inetConsoleBody.children.length > 500) {
@@ -1674,6 +2294,130 @@ if (btnClearInetConsole) {
   });
 }
 
+// Helper: extract plain text from a console body element
+function getConsoleText(consoleBodyEl) {
+  const lines = consoleBodyEl.querySelectorAll('.console-line');
+  const parts = [];
+  lines.forEach(line => {
+    // Use rawText if available (stripped of CRC badges), else textContent
+    let text = line.rawText || line.textContent;
+    // Remove any trailing CRC badge text if it slipped through
+    const badge = line.querySelector('.crc-badge');
+    if (badge && !line.rawText) {
+      text = text.replace(badge.textContent, '').trim();
+    }
+    parts.push(text);
+  });
+  return parts.join('\n');
+}
+
+// Helper: copy text to clipboard and briefly flash button
+function flashCopyIcon(btn) {
+  const origText = btn.textContent;
+  btn.textContent = '✔';
+  btn.classList.add('copied-flash');
+  setTimeout(() => {
+    btn.textContent = origText;
+    btn.classList.remove('copied-flash');
+  }, 1500);
+}
+
+const btnCopyInetConsole = document.getElementById('btn-copy-inet-console');
+if (btnCopyInetConsole) {
+  btnCopyInetConsole.addEventListener('click', async () => {
+    const inetText = getConsoleText(inetConsoleBody);
+    try {
+      await navigator.clipboard.writeText(inetText);
+      flashCopyIcon(btnCopyInetConsole);
+    } catch (e) {
+      console.warn('Clipboard write failed:', e);
+    }
+  });
+}
+
+// Debugging Tool card button listeners
+const btnDebugClearAll = document.getElementById('btn-debug-clear-all');
+if (btnDebugClearAll) {
+  btnDebugClearAll.addEventListener('click', () => {
+    // Clear Internet MQTT Console
+    inetConsoleBody.innerHTML = '';
+    inetConsoleHistory = [];
+    localStorage.removeItem('inet_console_history');
+
+    // Clear Cellular MQTT Console
+    cellConsoleBody.innerHTML = '';
+    cellConsoleHistory = [];
+    localStorage.removeItem('cell_console_history');
+
+    // Visual feedback
+    const origText = btnDebugClearAll.textContent;
+    btnDebugClearAll.textContent = '✔ Consoles Cleared!';
+    setTimeout(() => {
+      btnDebugClearAll.textContent = origText;
+    }, 1500);
+  });
+}
+
+const btnDebugSaveAll = document.getElementById('btn-debug-save-all');
+if (btnDebugSaveAll) {
+  btnDebugSaveAll.addEventListener('click', async () => {
+    const inetText = getConsoleText(inetConsoleBody);
+    const cellText = getConsoleText(cellConsoleBody);
+
+    const logContent = 
+      `=== intrenet mqtt ===\n` +
+      inetText +
+      `\n\n=== cellular mqtt ===\n` +
+      cellText + '\n';
+
+    if (window.electronAPI && window.electronAPI.writeMqttLog) {
+      const res = await window.electronAPI.writeMqttLog(logContent);
+      if (res && res.ok) {
+        // Visual feedback
+        const origText = btnDebugSaveAll.textContent;
+        btnDebugSaveAll.textContent = '✔ Logs Saved!';
+        btnDebugSaveAll.classList.add('saved-flash');
+        setTimeout(() => {
+          btnDebugSaveAll.textContent = origText;
+          btnDebugSaveAll.classList.remove('saved-flash');
+        }, 1500);
+      } else {
+        alert('Failed to save logs: ' + (res ? res.error : 'Unknown error'));
+      }
+    }
+  });
+}
+
+const btnDebugConnectAll = document.getElementById('btn-debug-connect-all');
+if (btnDebugConnectAll) {
+  btnDebugConnectAll.addEventListener('click', () => {
+    // 1. Internet MQTT Connect Broker
+    const btnInet = document.getElementById('btn-inet-connect');
+    if (btnInet && btnInet.textContent.trim() === 'Connect Broker') {
+      btnInet.click();
+    }
+
+    // 2. Cellular MQTT Secondary COM Connection
+    const btnCellModbus = document.getElementById('btn-cell-modbus-connect');
+    if (btnCellModbus && btnCellModbus.textContent.trim() === 'Connect Port') {
+      btnCellModbus.click();
+    }
+
+    // 3. Cellular MQTT Cellular COM Connection
+    const btnCell = document.getElementById('btn-cell-connect');
+    if (btnCell && btnCell.textContent.trim() === 'Connect Port') {
+      btnCell.click();
+    }
+
+    // Visual feedback
+    const origText = btnDebugConnectAll.textContent;
+    btnDebugConnectAll.textContent = '✔ Connecting All...';
+    setTimeout(() => {
+      btnDebugConnectAll.textContent = origText;
+    }, 1500);
+  });
+}
+
 // Rebuild inet console lines when HEX mode or CRC check changes
 function rebuildInetConsole() {
   inetConsoleBody.innerHTML = '';
@@ -1688,14 +2432,23 @@ function rebuildInetConsole() {
 
     if (item.type === 'recv') {
       line.classList.add('recv-msg');
-      const displayPayload = formatMqttPayload(item.rawPayload, hexMode);
-      line.textContent = `${timePrefix}<< [${item.topic}] ${displayPayload}`;
-      line.dataset.rawPayload = item.rawPayload;
-      line.dataset.topic = item.topic;
+      if (item.rawPayload !== undefined) {
+        const isNotify = shouldForceAscii(item.rawPayload);
+        const displayPayload = isNotify ? item.rawPayload : formatMqttPayload(item.rawPayload, hexMode);
+        line.textContent = `${timePrefix}<< [${item.topic}] ${displayPayload}`;
+        line.dataset.rawPayload = item.rawPayload;
+        line.dataset.topic = item.topic;
+      } else {
+        line.textContent = `${timePrefix}${item.text || ''}`;
+      }
       inetConsoleBody.appendChild(line);
     } else if (item.type === 'send') {
       line.classList.add('send-msg');
-      line.textContent = `${timePrefix}>> [${item.topic}] ${item.payload}`;
+      if (item.payload !== undefined) {
+        line.textContent = `${timePrefix}>> [${item.topic}] ${item.payload}`;
+      } else {
+        line.textContent = `${timePrefix}${item.text || ''}`;
+      }
       inetConsoleBody.appendChild(line);
     } else if (item.type === 'system' || item.type === 'error') {
       line.classList.add(item.type === 'error' ? 'error-msg' : 'system-msg');
@@ -1747,13 +2500,20 @@ if (chkInetAutoscroll) {
 // CELLULAR MQTT (DTU CONFIG)
 // ==========================================
 let cellSocket = null;
+let cellModbusSocket = null;
+let cellModbusFallbackTimerId = null;
+let lastCellModbusTrafficTime = 0;
+let cellModbusPortRxBuffer = [];
+let cellModbusSentCommandBytes = null;
+let cellFallbackRxBuffer = [];
+let cellAutoCsqTimerId = null;
+let isCellAutoCsqQuerying = false;
 const cellPortSelect = document.getElementById('cell-port-select');
 const cellBaudSelect = document.getElementById('cell-baud-select');
 const cellDataBitsSelect = document.getElementById('cell-data-bits-select');
 const cellStopBitsSelect = document.getElementById('cell-stop-bits-select');
 const cellParitySelect = document.getElementById('cell-parity-select');
 const btnCellConnect = document.getElementById('btn-cell-connect');
-const btnCellReadAll = document.getElementById('btn-cell-read-all');
 
 const cellBrokerIp = document.getElementById('cell-broker-ip');
 const cellBrokerPort = document.getElementById('cell-broker-port');
@@ -1886,6 +2646,11 @@ function loadCellSettings() {
     if (chkCellHexMode && settings.hexMode !== undefined) chkCellHexMode.checked = settings.hexMode;
     if (chkCellModbusCrc && settings.modbusCrc !== undefined) chkCellModbusCrc.checked = settings.modbusCrc;
     
+    const autoCsqEnInput = document.getElementById('cell-auto-csq-en');
+    const autoCsqIntervalInput = document.getElementById('cell-auto-csq-interval');
+    if (autoCsqEnInput && settings.autoCsqEn !== undefined) autoCsqEnInput.checked = settings.autoCsqEn;
+    if (autoCsqIntervalInput && settings.autoCsqInterval) autoCsqIntervalInput.value = settings.autoCsqInterval;
+    
     cellPreferredPort = settings.port || 'COM6';
   } else {
     cellPreferredPort = 'COM6';
@@ -1957,9 +2722,228 @@ function saveCellSettings() {
     timeTag: chkCellTimeTag ? chkCellTimeTag.checked : true,
     autoscroll: chkCellAutoscroll ? chkCellAutoscroll.checked : true,
     hexMode: chkCellHexMode ? chkCellHexMode.checked : false,
-    modbusCrc: chkCellModbusCrc ? chkCellModbusCrc.checked : false
+    modbusCrc: chkCellModbusCrc ? chkCellModbusCrc.checked : false,
+    autoCsqEn: document.getElementById('cell-auto-csq-en') ? document.getElementById('cell-auto-csq-en').checked : false,
+    autoCsqInterval: document.getElementById('cell-auto-csq-interval') ? parseInt(document.getElementById('cell-auto-csq-interval').value) : 10
   };
   localStorage.setItem('cell_mqtt_settings', JSON.stringify(settings));
+}
+
+/**
+ * Check if a byte array contains recognisable Modbus activity.
+ * Matches against known polling command prefixes (any rule in getKnownCommandRules).
+ * Used to detect active Modbus traffic so the Auto CSQ timer can be postponed.
+ */
+function hasModbusActivity(bytes) {
+  const rules = getKnownCommandRules();
+  if (rules.length === 0 || !bytes || bytes.length === 0) return false;
+  for (const rule of rules) {
+    const prefix = rule.prefix;
+    if (bytes.length >= prefix.length) {
+      // Scan through bytes to see if the prefix appears anywhere
+      for (let start = 0; start <= bytes.length - prefix.length; start++) {
+        let match = true;
+        for (let j = 0; j < prefix.length; j++) {
+          if (bytes[start + j] !== prefix[j]) { match = false; break; }
+        }
+        if (match) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Restart the Auto CSQ interval timer from zero (deferred).
+ * Called whenever Modbus activity is detected, so that AT+CSQ is
+ * not sent until a full quiet interval has passed after Modbus stops.
+ */
+function postponeCellAutoCsqPolling() {
+  const autoCsqEn = document.getElementById('cell-auto-csq-en');
+  if (!autoCsqEn || !autoCsqEn.checked) return;
+  if (!cellSocket || cellSocket.readyState !== WebSocket.OPEN) return;
+  // Restart the interval from scratch (deferred — no immediate poll)
+  startCellAutoCsqPolling(true);
+}
+
+/**
+ * Start the Auto CSQ polling interval.
+ * @param {boolean} [deferred=false] - If true, skip the initial immediate poll
+ *   and just wait the full interval. Used when restarting after Modbus activity.
+ */
+function startCellAutoCsqPolling(deferred = false) {
+  stopCellAutoCsqPolling(); // Clean up first
+  
+  const intervalInput = document.getElementById('cell-auto-csq-interval');
+  let seconds = parseInt(intervalInput.value);
+  if (isNaN(seconds) || seconds < 1) {
+    seconds = 10;
+    if (intervalInput) intervalInput.value = 10;
+  }
+  
+  const poll = () => {
+    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+      if (!isCellAutoCsqQuerying) {
+        isCellAutoCsqQuerying = true;
+        cellSocket.send(JSON.stringify({ action: 'query_csq' }));
+      }
+    } else {
+      stopCellAutoCsqPolling();
+      const toggle = document.getElementById('cell-auto-csq-en');
+      if (toggle) toggle.checked = false;
+    }
+  };
+  
+  if (!deferred) {
+    // Perform first check immediately on normal start
+    poll();
+  }
+  
+  // Set interval (always)
+  cellAutoCsqTimerId = setInterval(poll, seconds * 1000);
+}
+
+function stopCellAutoCsqPolling() {
+  if (cellAutoCsqTimerId) {
+    clearInterval(cellAutoCsqTimerId);
+    cellAutoCsqTimerId = null;
+  }
+  isCellAutoCsqQuerying = false;
+}
+
+// Load/Save Modbus port fallback settings
+let cellModbusPreferredPort = '';
+
+function loadCellModbusSettings() {
+  const settings = JSON.parse(localStorage.getItem('cell_modbus_settings'));
+  const portSelect = document.getElementById('cell-modbus-port-select');
+  const baudSelect = document.getElementById('cell-modbus-baud-select');
+  const dataBitsSelect = document.getElementById('cell-modbus-data-bits-select');
+  const stopBitsSelect = document.getElementById('cell-modbus-stop-bits-select');
+  const paritySelect = document.getElementById('cell-modbus-parity-select');
+  const timeoutInput = document.getElementById('cell-modbus-timeout');
+  const cmdInput = document.getElementById('cell-modbus-fallback-cmd');
+
+  if (settings) {
+    if (baudSelect && settings.baud) baudSelect.value = settings.baud;
+    if (dataBitsSelect && settings.dataBits) dataBitsSelect.value = settings.dataBits;
+    if (stopBitsSelect && settings.stopBits) stopBitsSelect.value = settings.stopBits;
+    if (paritySelect && settings.parity) paritySelect.value = settings.parity;
+    if (timeoutInput && settings.timeout) timeoutInput.value = settings.timeout;
+    if (cmdInput && settings.fallbackCmd) cmdInput.value = settings.fallbackCmd;
+    cellModbusPreferredPort = settings.port || 'COM3';
+  } else {
+    cellModbusPreferredPort = 'COM3';
+  }
+}
+
+function saveCellModbusSettings() {
+  const portSelect = document.getElementById('cell-modbus-port-select');
+  const baudSelect = document.getElementById('cell-modbus-baud-select');
+  const dataBitsSelect = document.getElementById('cell-modbus-data-bits-select');
+  const stopBitsSelect = document.getElementById('cell-modbus-stop-bits-select');
+  const paritySelect = document.getElementById('cell-modbus-parity-select');
+  const timeoutInput = document.getElementById('cell-modbus-timeout');
+  const cmdInput = document.getElementById('cell-modbus-fallback-cmd');
+
+  const settings = {
+    port: portSelect ? portSelect.value : '',
+    baud: baudSelect ? baudSelect.value : '115200',
+    dataBits: dataBitsSelect ? dataBitsSelect.value : '8',
+    stopBits: stopBitsSelect ? stopBitsSelect.value : '1',
+    parity: paritySelect ? paritySelect.value : 'None',
+    timeout: timeoutInput ? timeoutInput.value : '5',
+    fallbackCmd: cmdInput ? cmdInput.value : '01 03 00 00 00 0A C5 CD'
+  };
+
+  localStorage.setItem('cell_modbus_settings', JSON.stringify(settings));
+}
+
+function checkCellPortOccupation() {
+  const details = lastDetails || {};
+  
+  // 1. Check cell-port-select
+  const cellPortSelect = document.getElementById('cell-port-select');
+  const btnCellConnect = document.getElementById('btn-cell-connect');
+  if (cellPortSelect && btnCellConnect) {
+    const isConnected = cellSocket && cellSocket.readyState === WebSocket.OPEN;
+    const isConnecting = cellSocket && cellSocket.readyState === WebSocket.CONNECTING;
+    if (!isConnected && !isConnecting) {
+      const selectedPort = cellPortSelect.value;
+      const info = details[selectedPort] || {};
+      if (info.occupied) {
+        btnCellConnect.disabled = true;
+        btnCellConnect.style.opacity = '0.6';
+        btnCellConnect.title = `${selectedPort} is occupied by another application.`;
+      } else {
+        btnCellConnect.disabled = false;
+        btnCellConnect.style.opacity = '';
+        btnCellConnect.title = '';
+      }
+    } else {
+      btnCellConnect.disabled = false;
+      btnCellConnect.style.opacity = '';
+      btnCellConnect.title = '';
+    }
+  }
+  
+  // 2. Check cell-modbus-port-select
+  const modbusPortSelect = document.getElementById('cell-modbus-port-select');
+  const btnCellModbusConnect = document.getElementById('btn-cell-modbus-connect');
+  if (modbusPortSelect && btnCellModbusConnect) {
+    const isConnected = cellModbusSocket && cellModbusSocket.readyState === WebSocket.OPEN;
+    const isConnecting = cellModbusSocket && cellModbusSocket.readyState === WebSocket.CONNECTING;
+    if (!isConnected && !isConnecting) {
+      const selectedPort = modbusPortSelect.value;
+      const info = details[selectedPort] || {};
+      if (info.occupied) {
+        btnCellModbusConnect.disabled = true;
+        btnCellModbusConnect.style.opacity = '0.6';
+        btnCellModbusConnect.title = `${selectedPort} is occupied by another application.`;
+      } else {
+        btnCellModbusConnect.disabled = false;
+        btnCellModbusConnect.style.opacity = '';
+        btnCellModbusConnect.title = '';
+      }
+    } else {
+      btnCellModbusConnect.disabled = false;
+      btnCellModbusConnect.style.opacity = '';
+      btnCellModbusConnect.title = '';
+    }
+  }
+}
+
+function markPortOccupationLocally(port, occupied) {
+  if (!port) return;
+  if (!lastDetails) {
+    lastDetails = {};
+  }
+  if (!lastDetails[port]) {
+    lastDetails[port] = {
+      port: port,
+      name: `Serial Port (${port})`,
+      manufacturer: "------",
+      vid: "------",
+      pid: "------",
+      ser: "------"
+    };
+  }
+  lastDetails[port].occupied = occupied;
+  
+  // Immediately update occupation checks in UI
+  checkCellPortOccupation();
+  
+  // Immediately update COM tool tab occupation status
+  activeSessions.forEach((session) => {
+    if (session.portName === port && session.isOnline) {
+      session.updateOccupationStatus(occupied);
+    }
+  });
+
+  // Instantly rebuild top card badges to show correct color
+  if (lastPorts && typeof rebuildComPortBadges === 'function') {
+    rebuildComPortBadges(lastPorts, lastDetails);
+  }
 }
 
 function updateCellPortsDropdown(ports, details = {}) {
@@ -1974,6 +2958,7 @@ function updateCellPortsDropdown(ports, details = {}) {
     opt.value = '';
     opt.textContent = 'No Active Ports';
     cellPortSelect.appendChild(opt);
+    checkCellPortOccupation();
     return;
   }
   
@@ -1990,6 +2975,40 @@ function updateCellPortsDropdown(ports, details = {}) {
   if (!ports.includes(currentSelection)) {
     cellPortSelect.selectedIndex = 0;
   }
+  checkCellPortOccupation();
+}
+
+function updateCellModbusPortsDropdown(ports, details = {}) {
+  const portSelect = document.getElementById('cell-modbus-port-select');
+  if (!portSelect) return;
+  if (cellModbusSocket && cellModbusSocket.readyState === WebSocket.OPEN) return;
+
+  const currentSelection = portSelect.value || cellModbusPreferredPort;
+  portSelect.innerHTML = '';
+
+  if (ports.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No Active Ports';
+    portSelect.appendChild(opt);
+    checkCellPortOccupation();
+    return;
+  }
+
+  ports.forEach(port => {
+    const opt = document.createElement('option');
+    opt.value = port;
+    const info = details[port] || {};
+    const occupiedSuffix = info.occupied ? ' (Occupied)' : '';
+    opt.textContent = port + occupiedSuffix;
+    if (port === currentSelection) opt.selected = true;
+    portSelect.appendChild(opt);
+  });
+
+  if (!ports.includes(currentSelection)) {
+    portSelect.selectedIndex = 0;
+  }
+  checkCellPortOccupation();
 }
 
 // Hook into existing serial ports polling in renderer.js
@@ -1997,6 +3016,7 @@ const originalUpdateComPortDropdown = updateComPortDropdown;
 updateComPortDropdown = function(ports, details) {
   originalUpdateComPortDropdown(ports, details);
   updateCellPortsDropdown(ports, details);
+  updateCellModbusPortsDropdown(ports, details);
 };
 
 function connectCellularDTU() {
@@ -2019,6 +3039,7 @@ function connectCellularDTU() {
   
   addLogToConsole(cellConsoleBody, `[System] Connecting to Cellular DTU on ${port} at ${baud} baud...`, 'system', chkCellTimeTag.checked);
   btnCellConnect.disabled = true;
+  toggleCellSettingsDisable(true);
   
   const wsUrl = `${BASE_URL.replace('http://', 'ws://')}/ws/cellular?port=${port}&baud=${baud}&bytesize=${bytesize}&stopbits=${stopbits}&parity=${parity}`;
   
@@ -2032,6 +3053,29 @@ function connectCellularDTU() {
       
       toggleCellControlButtons(true);
       addLogToConsole(cellConsoleBody, `[System] DTU Serial Port connected successfully. Ready.`, 'system', chkCellTimeTag.checked);
+      
+      // Auto read all HW settings upon connection
+      if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+        cellSocket.send(JSON.stringify({ action: 'provision' }));
+      }
+      
+      if (typeof markPortOccupationLocally === 'function') {
+        markPortOccupationLocally(port, true);
+      }
+
+      const autoCsqEn = document.getElementById('cell-auto-csq-en');
+      if (autoCsqEn && autoCsqEn.checked) {
+        startCellAutoCsqPolling();
+      }
+
+      // Reset traffic state and timers on connect
+      lastCellModbusTrafficTime = 0;
+      if (cellModbusFallbackTimerId) {
+        clearTimeout(cellModbusFallbackTimerId);
+        cellModbusFallbackTimerId = null;
+      }
+
+      startFallbackTimerIfActive();
     };
     
     cellSocket.onmessage = (event) => {
@@ -2041,14 +3085,17 @@ function connectCellularDTU() {
         const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
         
         if (msg.type === 'data') {
+          // Postpone Auto CSQ query whenever any data is received
+          postponeCellAutoCsqPolling();
           let displayData = msg.data;
+          const isNotify = shouldForceAscii(msg.data);
           
-          if (hexMode) {
+          if (hexMode && !isNotify) {
             displayData = stringToHex(msg.data);
           } else {
             // Auto: if data looks like a compact hex string, format with spaces
             const cleanHex = msg.data.replace(/\s+/g, '');
-            if (/^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
+            if (!isNotify && /^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
               displayData = formatHexWithSpaces(cleanHex);
             }
           }
@@ -2069,10 +3116,16 @@ function connectCellularDTU() {
           for (let i = 0; i < msg.data.length; i++) {
             bytes.push(msg.data.charCodeAt(i) & 0xFF);
           }
+          detectFallbackTraffic(bytes);
           const modbusPackets = findModbusPackets(bytes);
           modbusPackets.forEach(pkt => {
             performanceTracker.registerCellularMsg(pkt);
           });
+          
+          // Postpone Auto CSQ query if Modbus activity is detected on RX
+          if (hasModbusActivity(bytes)) {
+            postponeCellAutoCsqPolling();
+          }
           
           if (crcEnabled) {
             cellAnalyzeBuffer(bytes, cellConsoleBody, crcEnabled, chkCellTimeTag && chkCellTimeTag.checked);
@@ -2095,7 +3148,15 @@ function connectCellularDTU() {
           loadHwStateIntoUI(msg.state);
         } else if (msg.type === 'network_info') {
           loadNetworkInfoIntoUI(msg.data);
+        } else if (msg.type === 'csq_info') {
+          isCellAutoCsqQuerying = false;
+          const csqVal = msg.csq || 'N/A';
+          const displayEl = document.getElementById('cell-auto-csq-display');
+          if (displayEl) displayEl.textContent = csqVal;
+          const netCsqEl = document.getElementById('net-info-csq');
+          if (netCsqEl) netCsqEl.textContent = csqVal;
         } else if (msg.type === 'error') {
+          isCellAutoCsqQuerying = false;
           addLogToConsole(cellConsoleBody, `[Error] ${msg.message}`, 'error', chkCellTimeTag.checked);
         }
       } catch (err) {
@@ -2113,20 +3174,382 @@ function connectCellularDTU() {
     };
   } catch (err) {
     btnCellConnect.disabled = false;
+    toggleCellSettingsDisable(false);
     addLogToConsole(cellConsoleBody, `[System Error] Failed to open socket: ${err.message}`, 'error', chkCellTimeTag.checked);
   }
 }
 
+function isCellModbusFallbackActive() {
+  return cellSocket && cellSocket.readyState === WebSocket.OPEN &&
+         cellModbusSocket && cellModbusSocket.readyState === WebSocket.OPEN;
+}
+
+function connectCellModbusPort() {
+  const btn = document.getElementById('btn-cell-modbus-connect');
+  if (!btn) return;
+
+  if (cellModbusSocket && cellModbusSocket.readyState === WebSocket.OPEN) {
+    cellModbusSocket.send(JSON.stringify({ action: 'close' }));
+    cellModbusSocket.close();
+    return;
+  }
+
+  const portSelect = document.getElementById('cell-modbus-port-select');
+  const baudSelect = document.getElementById('cell-modbus-baud-select');
+  const dataBitsSelect = document.getElementById('cell-modbus-data-bits-select');
+  const stopBitsSelect = document.getElementById('cell-modbus-stop-bits-select');
+  const paritySelect = document.getElementById('cell-modbus-parity-select');
+
+  const port = portSelect.value;
+  const baud = baudSelect.value;
+  const bytesize = dataBitsSelect.value;
+  const stopbits = stopBitsSelect.value;
+  const parity = paritySelect.value === 'None' ? 'N' : paritySelect.value[0];
+
+  if (!port) {
+    addLogToConsole(cellConsoleBody, '[System] Error: No Modbus COM port selected.', 'error', chkCellTimeTag.checked);
+    return;
+  }
+
+  addLogToConsole(cellConsoleBody, `[System] Connecting to Modbus COM Port on ${port} at ${baud} baud...`, 'system', chkCellTimeTag.checked);
+  btn.disabled = true;
+
+  const wsUrl = `${BASE_URL.replace('http://', 'ws://')}/ws/serial?port=${port}&baud=${baud}&bytesize=${bytesize}&stopbits=${stopbits}&parity=${parity}`;
+
+  try {
+    cellModbusSocket = new WebSocket(wsUrl);
+
+    cellModbusSocket.onopen = () => {
+      btn.disabled = false;
+      btn.textContent = 'Disconnect Port';
+      btn.style.background = 'linear-gradient(135deg, var(--danger), #b02a37)';
+
+      portSelect.disabled = true;
+      baudSelect.disabled = true;
+      dataBitsSelect.disabled = true;
+      stopBitsSelect.disabled = true;
+      paritySelect.disabled = true;
+
+      addLogToConsole(cellConsoleBody, `[System] Modbus COM Port connected successfully. Ready.`, 'system', chkCellTimeTag.checked);
+      
+      saveCellModbusSettings();
+
+      if (typeof markPortOccupationLocally === 'function') {
+        markPortOccupationLocally(port, true);
+      }
+
+      // Reset traffic state and timers on connect
+      lastCellModbusTrafficTime = 0;
+      if (cellModbusFallbackTimerId) {
+        clearTimeout(cellModbusFallbackTimerId);
+        cellModbusFallbackTimerId = null;
+      }
+
+      startFallbackTimerIfActive();
+    };
+
+    cellModbusSocket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'data') {
+          postponeCellAutoCsqPolling();
+          handleCellModbusPortMessage(msg.data);
+        } else if (msg.type === 'error') {
+          addLogToConsole(cellConsoleBody, `[Modbus Port Error] ${msg.message}`, 'error', chkCellTimeTag.checked);
+        }
+      } catch (err) {
+        console.error('Failed to parse Modbus Port message:', err);
+      }
+    };
+
+    cellModbusSocket.onclose = () => {
+      closeCellModbusPortUI();
+    };
+
+    cellModbusSocket.onerror = (err) => {
+      addLogToConsole(cellConsoleBody, '[System Error] Modbus Port WebSocket error occurred.', 'error', chkCellTimeTag.checked);
+      closeCellModbusPortUI();
+    };
+  } catch (err) {
+    btn.disabled = false;
+    addLogToConsole(cellConsoleBody, `[System Error] Failed to open Modbus Port socket: ${err.message}`, 'error', chkCellTimeTag.checked);
+  }
+}
+
+function closeCellModbusPortUI() {
+  const btn = document.getElementById('btn-cell-modbus-connect');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Connect Port';
+    btn.style.background = '';
+  }
+
+  const portSelect = document.getElementById('cell-modbus-port-select');
+  const baudSelect = document.getElementById('cell-modbus-baud-select');
+  const dataBitsSelect = document.getElementById('cell-modbus-data-bits-select');
+  const stopBitsSelect = document.getElementById('cell-modbus-stop-bits-select');
+  const paritySelect = document.getElementById('cell-modbus-parity-select');
+
+  const port = portSelect ? portSelect.value : '';
+
+  if (portSelect) portSelect.disabled = false;
+  if (baudSelect) baudSelect.disabled = false;
+  if (dataBitsSelect) dataBitsSelect.disabled = false;
+  if (stopBitsSelect) stopBitsSelect.disabled = false;
+  if (paritySelect) paritySelect.disabled = false;
+
+  addLogToConsole(cellConsoleBody, `[System] Modbus COM Port disconnected.`, 'system', chkCellTimeTag.checked);
+
+  cellModbusSocket = null;
+  cellModbusPortRxBuffer = [];
+  cellModbusSentCommandBytes = null;
+  if (cellModbusFallbackTimerId) {
+    clearTimeout(cellModbusFallbackTimerId);
+    cellModbusFallbackTimerId = null;
+  }
+  lastCellModbusTrafficTime = 0;
+  
+  if (port && typeof markPortOccupationLocally === 'function') {
+    markPortOccupationLocally(port, false);
+  } else {
+    checkCellPortOccupation();
+  }
+}
+
+function handleCellModbusPortMessage(dataStr) {
+  // Convert received string data to bytes
+  const bytes = [];
+  for (let i = 0; i < dataStr.length; i++) {
+    bytes.push(dataStr.charCodeAt(i) & 0xFF);
+  }
+
+  cellModbusPortRxBuffer.push(...bytes);
+  if (cellModbusPortRxBuffer.length > 512) {
+    cellModbusPortRxBuffer = cellModbusPortRxBuffer.slice(-512);
+  }
+
+  let buf = cellModbusPortRxBuffer;
+  let offset = 0;
+
+  while (offset < buf.length) {
+    const parsed = tryParseModbusAt(buf, offset, 'response');
+    if (parsed) {
+      console.log(`[Fallback Monitor] Received response from Modbus Port: ${bytesToHexSpaced(parsed.frame)}`);
+      
+      // Send both the command and response out via COM6 if we actually sent a command via fallback
+      if (cellSocket && cellSocket.readyState === WebSocket.OPEN && cellModbusSentCommandBytes) {
+        const cmdBytes = cellModbusSentCommandBytes;
+        const respBytes = parsed.frame;
+
+        // Send command
+        cellSocket.send(JSON.stringify({
+          action: 'write',
+          data: bytesToHexCompact(cmdBytes),
+          hex: true
+        }));
+        
+        // Send response
+        cellSocket.send(JSON.stringify({
+          action: 'write',
+          data: bytesToHexCompact(respBytes),
+          hex: true
+        }));
+
+        // Log and print on Cellular MQTT console
+        const timePrefix = chkCellTimeTag && chkCellTimeTag.checked ? getFormattedTime() + ' ' : '';
+        
+        // Command line
+        const cmdText = `${bytesToHexSpaced(cmdBytes)}`;
+        addLogToConsole(cellConsoleBody, `>> ${cmdText}`, 'send', chkCellTimeTag.checked);
+
+        // Response line
+        const respText = `${bytesToHexSpaced(respBytes)}`;
+        addLogToConsole(cellConsoleBody, `>> ${respText}`, 'send', chkCellTimeTag.checked);
+
+        // Feed to standard Modbus analyzer (CRC check accumulator) if enabled
+        const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+        if (crcEnabled) {
+          cellPushToAccumulator(cmdBytes);
+          cellPushToAccumulator(respBytes);
+        }
+
+        if (chkCellAutoscroll && chkCellAutoscroll.checked) {
+          cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+        }
+      }
+
+      offset += parsed.len;
+      cellModbusSentCommandBytes = null;
+    } else {
+      const { len } = modbusFrameLength(buf, offset, 'response') || {};
+      if (len === -1 || (len > 0 && offset + len > buf.length)) {
+        break; // Need more data
+      }
+      offset++;
+    }
+  }
+
+  if (offset > 0) {
+    cellModbusPortRxBuffer = buf.slice(offset);
+  }
+}
+
+function triggerModbusFallbackAction() {
+  if (!isCellModbusFallbackActive()) return;
+
+  if (isCellAutoCsqQuerying) {
+    console.log("[Fallback Monitor] Postponing fallback action because CSQ query is active.");
+    const timeoutSec = parseFloat(document.getElementById('cell-modbus-timeout').value) || 5;
+    if (cellModbusFallbackTimerId) clearTimeout(cellModbusFallbackTimerId);
+    cellModbusFallbackTimerId = setTimeout(() => {
+      triggerModbusFallbackAction();
+    }, timeoutSec * 1000);
+    return;
+  }
+
+  const cmdInput = document.getElementById('cell-modbus-fallback-cmd');
+  const cmdHex = cmdInput ? cmdInput.value.trim() : '';
+  if (!cmdHex) {
+    console.warn("[Fallback Monitor] No fallback command specified.");
+    return;
+  }
+
+  const cleanHex = cmdHex.replace(/\s+/g, '');
+  if (!/^[0-9A-Fa-f]+$/.test(cleanHex) || cleanHex.length % 2 !== 0) {
+    addLogToConsole(cellConsoleBody, `[Fallback Error] Invalid HEX command: ${cmdHex}`, 'error', chkCellTimeTag.checked);
+    return;
+  }
+
+  // Parse command bytes
+  const bytes = [];
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+  }
+  cellModbusSentCommandBytes = bytes;
+
+  // Send to COM3
+  console.log(`[Fallback Monitor] Sending command to Modbus Port: ${cleanHex}`);
+  cellModbusSocket.send(JSON.stringify({
+    action: 'write',
+    data: cleanHex,
+    hex: true
+  }));
+}
+
+function resetCellModbusFallbackTimer() {
+  if (cellModbusFallbackTimerId) {
+    clearTimeout(cellModbusFallbackTimerId);
+    cellModbusFallbackTimerId = null;
+  }
+}
+
+function startFallbackTimerIfActive() {
+  if (isCellModbusFallbackActive() && lastCellModbusTrafficTime > 0) {
+    const timeoutSec = parseFloat(document.getElementById('cell-modbus-timeout').value) || 5;
+    const elapsedMs = Date.now() - lastCellModbusTrafficTime;
+    const timeoutMs = timeoutSec * 1000;
+    
+    if (elapsedMs >= timeoutMs) {
+      console.log(`[Fallback Monitor] Modbus traffic ended ${Math.round(elapsedMs/1000)}s ago. Triggering fallback action immediately.`);
+      if (cellModbusFallbackTimerId) clearTimeout(cellModbusFallbackTimerId);
+      triggerModbusFallbackAction();
+    } else {
+      const remainingMs = timeoutMs - elapsedMs;
+      console.log(`[Fallback Monitor] Modbus traffic ended. Triggering fallback action in ${Math.round(remainingMs/1000)}s.`);
+      if (cellModbusFallbackTimerId) clearTimeout(cellModbusFallbackTimerId);
+      cellModbusFallbackTimerId = setTimeout(() => {
+        triggerModbusFallbackAction();
+      }, remainingMs);
+    }
+  }
+}
+
+function handleModbusFrameDetected(type, frame) {
+  const hexSpaced = bytesToHexSpaced(frame);
+  console.log(`[Fallback Monitor] Detected ${type} frame: ${hexSpaced}`);
+
+  if (type === 'response' || type === 'error') {
+    lastCellModbusTrafficTime = Date.now();
+    
+    // Clear any existing fallback timer
+    resetCellModbusFallbackTimer();
+
+    // Start fallback timer only if both sockets are open (active)
+    if (isCellModbusFallbackActive()) {
+      const timeoutSec = parseFloat(document.getElementById('cell-modbus-timeout').value) || 5;
+      console.log(`[Fallback Monitor] Starting timeout of ${timeoutSec} seconds...`);
+      cellModbusFallbackTimerId = setTimeout(() => {
+        triggerModbusFallbackAction();
+      }, timeoutSec * 1000);
+    }
+  }
+}
+
+function detectFallbackTraffic(newBytes) {
+
+  cellFallbackRxBuffer.push(...newBytes);
+  if (cellFallbackRxBuffer.length > 512) {
+    cellFallbackRxBuffer = cellFallbackRxBuffer.slice(-512);
+  }
+
+  let buf = cellFallbackRxBuffer;
+  let offset = 0;
+
+  while (offset < buf.length) {
+    const parsed = tryParseModbusAt(buf, offset, 'auto');
+    if (parsed) {
+      handleModbusFrameDetected(parsed.type, parsed.frame);
+      offset += parsed.len;
+    } else {
+      const { len } = modbusFrameLength(buf, offset, 'auto') || {};
+      if (len === -1 || (len > 0 && offset + len > buf.length)) {
+        break; // Wait for more data
+      }
+      offset++;
+    }
+  }
+
+  if (offset > 0) {
+    cellFallbackRxBuffer = buf.slice(offset);
+  }
+}
+
+
+function toggleCellSettingsDisable(disabled) {
+  if (cellPortSelect) cellPortSelect.disabled = disabled;
+  if (cellBaudSelect) cellBaudSelect.disabled = disabled;
+  if (cellDataBitsSelect) cellDataBitsSelect.disabled = disabled;
+  if (cellStopBitsSelect) cellStopBitsSelect.disabled = disabled;
+  if (cellParitySelect) cellParitySelect.disabled = disabled;
+}
+
 function closeCellSocketUI() {
+  const port = cellPortSelect ? cellPortSelect.value : '';
   btnCellConnect.disabled = false;
   btnCellConnect.textContent = 'Connect Port';
   btnCellConnect.style.background = '';
   toggleCellControlButtons(false);
+  toggleCellSettingsDisable(false);
   cellSocket = null;
+  lastCellModbusTrafficTime = 0;
+  
+  if (cellModbusFallbackTimerId) {
+    clearTimeout(cellModbusFallbackTimerId);
+    cellModbusFallbackTimerId = null;
+  }
+  stopCellAutoCsqPolling(); // Clean up Auto CSQ Polling
+  
+  if (port && typeof markPortOccupationLocally === 'function') {
+    markPortOccupationLocally(port, false);
+  } else {
+    checkCellPortOccupation();
+  }
 }
 
 function toggleCellControlButtons(enabled) {
-  [btnCellReadAll, btnCellApplyMode, btnCellReloadUart, btnCellApplyUart, btnCellReloadSubs, btnCellApplySubs, btnCellReloadPubs, btnCellApplyPubs, btnCellApplyWill, btnCellReloadMqttcon, btnCellApplyMqttcon, btnCellPubModbus, btnCellReloadPoll, btnCellApplyPoll, btnCellCheckNet, btnCellConsoleSend].forEach(btn => {
+  const csqEn = document.getElementById('cell-auto-csq-en');
+  const csqInt = document.getElementById('cell-auto-csq-interval');
+  [btnCellApplyMode, btnCellReloadUart, btnCellApplyUart, btnCellReloadSubs, btnCellApplySubs, btnCellReloadPubs, btnCellApplyPubs, btnCellApplyWill, btnCellReloadMqttcon, btnCellApplyMqttcon, btnCellPubModbus, btnCellReloadPoll, btnCellApplyPoll, btnCellCheckNet, btnCellConsoleSend, csqEn, csqInt].forEach(btn => {
     if (btn) btn.disabled = !enabled;
   });
 }
@@ -2258,7 +3681,12 @@ function getPollingListFromUI() {
   rows.forEach((row, i) => {
     const cmd = row.querySelector('.poll-cmd-inp').value.trim();
     if (cmd) {
-      list.push({ Index: i + 1, Command: cmd });
+      // Read the actual row number displayed in the first <td> (set by renumberPollingRows / rebuildPollingListUI).
+      // Using i+1 (forEach counter) would give wrong Index when the polling list was loaded from hardware
+      // and earlier slots were empty — e.g. commands stored in DTU slots 12-20 would show as Index 1-9.
+      const indexCell = row.querySelector('td');
+      const displayedIndex = indexCell ? parseInt(indexCell.textContent.trim(), 10) : NaN;
+      list.push({ Index: isNaN(displayedIndex) ? (i + 1) : displayedIndex, Command: cmd });
     }
   });
   return list;
@@ -2383,16 +3811,28 @@ if (cellModbusAddrDec) {
 if (cellModbusFunc) cellModbusFunc.addEventListener('change', updateGeneratedModbusHex);
 if (cellModbusQty) cellModbusQty.addEventListener('input', updateGeneratedModbusHex);
 
-// Action triggers for DTU automation WS actions
 if (btnCellConnect) btnCellConnect.addEventListener('click', connectCellularDTU);
 
-if (btnCellReadAll) {
-  btnCellReadAll.addEventListener('click', () => {
-    if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
-      cellSocket.send(JSON.stringify({ action: 'provision' }));
+const btnCellModbusConnect = document.getElementById('btn-cell-modbus-connect');
+if (btnCellModbusConnect) btnCellModbusConnect.addEventListener('click', connectCellModbusPort);
+
+const cellModbusPortSelect = document.getElementById('cell-modbus-port-select');
+const cellModbusBaudSelect = document.getElementById('cell-modbus-baud-select');
+const cellModbusDataBitsSelect = document.getElementById('cell-modbus-data-bits-select');
+const cellModbusStopBitsSelect = document.getElementById('cell-modbus-stop-bits-select');
+const cellModbusParitySelect = document.getElementById('cell-modbus-parity-select');
+const cellModbusTimeout = document.getElementById('cell-modbus-timeout');
+const cellModbusFallbackCmd = document.getElementById('cell-modbus-fallback-cmd');
+
+[cellModbusPortSelect, cellModbusBaudSelect, cellModbusDataBitsSelect, cellModbusStopBitsSelect, cellModbusParitySelect, cellModbusTimeout, cellModbusFallbackCmd].forEach(el => {
+  if (el) el.addEventListener('change', () => {
+    saveCellModbusSettings();
+    if (el === cellModbusPortSelect) {
+      checkCellPortOccupation();
     }
   });
-}
+});
+
 
 if (btnCellApplyMode) {
   btnCellApplyMode.addEventListener('click', () => {
@@ -2522,6 +3962,9 @@ if (btnCellPubModbus) {
       const hexStr = modbusGenHexDisplay.textContent.trim();
       if (hexStr && hexStr !== '------' && hexStr !== 'Error') {
         cellSocket.send(JSON.stringify({ action: 'write', data: hexStr, hex: true }));
+        if (isCellModbusFallbackActive()) {
+          resetCellModbusFallbackTimer();
+        }
         const timePrefix = chkCellTimeTag && chkCellTimeTag.checked ? getFormattedTime() + ' ' : '';
         const line = document.createElement('div');
         line.className = 'console-line send-msg';
@@ -2530,6 +3973,13 @@ if (btnCellPubModbus) {
         const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
         if (crcEnabled) {
           cellRecordSentFrame(hexStr);
+        }
+        // Postpone Auto CSQ query whenever a Modbus command is sent (TX activity)
+        const txBytes = hexStr.replace(/\s+/g, '').match(/.{1,2}/g)
+          ? hexStr.replace(/\s+/g, '').match(/.{1,2}/g).map(h => parseInt(h, 16))
+          : [];
+        if (txBytes.length > 0 && hasModbusActivity(txBytes)) {
+          postponeCellAutoCsqPolling();
         }
         cellConsoleHistory.push({ type: 'send', data: `>> ${hexStr}`, timestamp: getFormattedTime() });
         saveCellConsoleHistory();
@@ -2584,14 +4034,25 @@ if (btnCellConsoleSend) {
     
     if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
       cellSocket.send(JSON.stringify({ action: 'write', data: text, hex: false }));
+      if (isCellModbusFallbackActive()) {
+        resetCellModbusFallbackTimer();
+      }
       const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
+      const clean = text.replace(/\s+/g, '');
+      const isHexPayload = /^[0-9A-Fa-f]+$/.test(clean) && clean.length % 2 === 0;
       if (crcEnabled) {
         // Record sent frame for modbus response correlation
-        const clean = text.replace(/\s+/g, '');
-        if (/^[0-9A-Fa-f]+$/.test(clean) && clean.length % 2 === 0) {
+        if (isHexPayload) {
           cellRecordSentFrame(text);
         } else {
           cellRecordSentFrame(stringToHex(text));
+        }
+      }
+      // Postpone Auto CSQ query whenever a Modbus command is sent (TX activity)
+      if (isHexPayload) {
+        const txBytes = clean.match(/.{1,2}/g).map(h => parseInt(h, 16));
+        if (hasModbusActivity(txBytes)) {
+          postponeCellAutoCsqPolling();
         }
       }
       addLogToConsole(cellConsoleBody, `>> ${displayText}`, 'send', chkCellTimeTag.checked);
@@ -2616,6 +4077,19 @@ if (btnClearCellConsole) {
   });
 }
 
+const btnCopyCellConsole = document.getElementById('btn-copy-cell-console');
+if (btnCopyCellConsole) {
+  btnCopyCellConsole.addEventListener('click', async () => {
+    const cellText = getConsoleText(cellConsoleBody);
+    try {
+      await navigator.clipboard.writeText(cellText);
+      flashCopyIcon(btnCopyCellConsole);
+    } catch (e) {
+      console.warn('Clipboard write failed:', e);
+    }
+  });
+}
+
 // Rebuild cell console lines when HEX mode or CRC check changes
 function rebuildCellConsole() {
   cellConsoleBody.innerHTML = '';
@@ -2630,21 +4104,26 @@ function rebuildCellConsole() {
 
     if (item.type === 'recv') {
       line.classList.add('recv-msg');
-      let displayData = item.data;
-      if (hexMode) {
-        displayData = stringToHex(item.data);
-      } else {
-        const cleanHex = item.data.replace(/\s+/g, '');
-        if (/^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
-          displayData = formatHexWithSpaces(cleanHex);
+      if (item.data !== undefined) {
+        let displayData = item.data;
+        const isNotify = shouldForceAscii(item.data);
+        if (hexMode && !isNotify) {
+          displayData = stringToHex(item.data);
+        } else if (typeof item.data === 'string') {
+          const cleanHex = item.data.replace(/\s+/g, '');
+          if (!isNotify && /^[0-9A-Fa-f]{6,}$/.test(cleanHex) && cleanHex.length % 2 === 0) {
+            displayData = formatHexWithSpaces(cleanHex);
+          }
         }
+        line.textContent = `${timePrefix}<< ${displayData}`;
+        line.dataset.rawData = item.data;
+      } else {
+        line.textContent = `${timePrefix}${item.text || ''}`;
       }
-      line.textContent = `${timePrefix}<< ${displayData}`;
-      line.dataset.rawData = item.data;
       cellConsoleBody.appendChild(line);
     } else if (item.type === 'send') {
       line.classList.add('send-msg');
-      line.textContent = `${timePrefix}${item.data}`;
+      line.textContent = `${timePrefix}${item.data !== undefined ? item.data : (item.text || '')}`;
       cellConsoleBody.appendChild(line);
     } else if (item.type === 'system' || item.type === 'error') {
       line.classList.add(item.type === 'error' ? 'error-msg' : 'system-msg');
@@ -2689,9 +4168,37 @@ if (chkCellAutoscroll) {
   });
 }
 
-[cellBaudSelect, cellDataBitsSelect, cellStopBitsSelect, cellParitySelect, cellBrokerIp, cellBrokerPort, cellBrokerCid, cellBrokerUser, cellBrokerPwd, cellDtuBaud, cellDtuData, cellDtuStop, cellDtuParity, cellWillEn, cellWillTopic, cellWillMsg, cellWillQos, cellWillRetain, cellCleanSession, cellKeepAlive, cellModbusIdHex, cellModbusIdDec, cellModbusFunc, cellModbusAddrHex, cellModbusAddrDec, cellModbusQty, cellTaskCycle, cellTaskInterval, cellTaskDistEn, cellTaskDistFmt, cellLineEndingSelect].forEach(el => {
-  if (el) el.addEventListener('change', saveCellSettings);
+[cellPortSelect, cellBaudSelect, cellDataBitsSelect, cellStopBitsSelect, cellParitySelect, cellBrokerIp, cellBrokerPort, cellBrokerCid, cellBrokerUser, cellBrokerPwd, cellDtuBaud, cellDtuData, cellDtuStop, cellDtuParity, cellWillEn, cellWillTopic, cellWillMsg, cellWillQos, cellWillRetain, cellCleanSession, cellKeepAlive, cellModbusIdHex, cellModbusIdDec, cellModbusFunc, cellModbusAddrHex, cellModbusAddrDec, cellModbusQty, cellTaskCycle, cellTaskInterval, cellTaskDistEn, cellTaskDistFmt, cellLineEndingSelect].forEach(el => {
+  if (el) el.addEventListener('change', () => {
+    saveCellSettings();
+    if (el === cellPortSelect) {
+      checkCellPortOccupation();
+    }
+  });
 });
+
+const cellAutoCsqEn = document.getElementById('cell-auto-csq-en');
+const cellAutoCsqInterval = document.getElementById('cell-auto-csq-interval');
+
+if (cellAutoCsqEn) {
+  cellAutoCsqEn.addEventListener('change', () => {
+    saveCellSettings();
+    if (cellAutoCsqEn.checked) {
+      startCellAutoCsqPolling();
+    } else {
+      stopCellAutoCsqPolling();
+    }
+  });
+}
+
+if (cellAutoCsqInterval) {
+  cellAutoCsqInterval.addEventListener('change', () => {
+    saveCellSettings();
+    if (cellAutoCsqEn && cellAutoCsqEn.checked) {
+      startCellAutoCsqPolling();
+    }
+  });
+}
 
 // Bind slot list inputs
 for (let i = 0; i < 4; i++) {
@@ -3007,9 +4514,11 @@ function findModbusPackets(rawBytes) {
 // Initialize settings on startup
 loadInetSettings();
 loadCellSettings();
+loadCellModbusSettings();
 loadInetConsoleHistory();
 loadCellConsoleHistory();
 updateGeneratedModbusHex();
+updateSidebarCsqCardVisibility();
 
 
 window.addEventListener('resize', () => {

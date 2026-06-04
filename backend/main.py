@@ -523,6 +523,9 @@ async def websocket_cellular(
             action = msg.get("action")
             
             if action == "write":
+                if is_automating:
+                    print("[DEBUG] Ignoring write action because is_automating is True", flush=True)
+                    continue
                 payload = msg.get("data", "")
                 is_hex = msg.get("hex", False)
                 if is_hex:
@@ -696,6 +699,24 @@ async def websocket_cellular(
                         queue_send({"type": "error", "message": "Failed to enter AT mode."})
                 except Exception as e:
                     queue_send({"type": "error", "message": f"Network check failed: {str(e)}"})
+                finally:
+                    is_automating = False
+                    
+            elif action == "query_csq":
+                is_automating = True
+                await asyncio.sleep(0.2)
+                try:
+                    success = await asyncio.to_thread(cellular_mqtt_manager.enter_at_mode, ser, sync_log_cb)
+                    if success:
+                        cmd_resp = await asyncio.to_thread(cellular_mqtt_manager._send_and_wait, ser, b'AT+CSQ\r\n', 1.0, sync_log_cb)
+                        parsed = cellular_mqtt_manager.parse_slot_response(cmd_resp, "+CSQ")
+                        csq_val = parsed[0] if parsed else "N/A"
+                        await asyncio.to_thread(cellular_mqtt_manager.exit_at_mode, ser, False, sync_log_cb)
+                        queue_send({"type": "csq_info", "csq": csq_val})
+                    else:
+                        queue_send({"type": "error", "message": "Failed to enter AT mode."})
+                except Exception as e:
+                    queue_send({"type": "error", "message": f"CSQ query failed: {str(e)}"})
                 finally:
                     is_automating = False
                     

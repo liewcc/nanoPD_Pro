@@ -66,6 +66,11 @@ if (crcDelayInput) {
   }
   crcDelayInput.addEventListener('change', () => {
     localStorage.setItem('crc_check_delay', crcDelayInput.value);
+    performanceTracker.matchedPoints = reconstructHistoryCycles();
+    savePerformanceTrackerToLocalStorage();
+    if (panePerf && panePerf.classList.contains('active')) {
+      drawPerformanceChart();
+    }
   });
 }
 
@@ -2283,6 +2288,12 @@ function cellPushToAccumulator(newBytes, consoleBody) {
     if (cellCrcAccumulator.length > 0) {
       const snapshot = [...cellCrcAccumulator];
       analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'cell');
+      
+      performanceTracker.matchedPoints = reconstructHistoryCycles();
+      savePerformanceTrackerToLocalStorage();
+      if (panePerf && panePerf.classList.contains('active')) {
+        drawPerformanceChart();
+      }
     }
     cellCrcAccumulator = [];
     cellMatchCount = 0;
@@ -2746,27 +2757,7 @@ function inetPushToAccumulator(newBytes, consoleBody) {
     if (hasData) {
       updateMqttPayloadBadge(isPass);
 
-      const inetDuration = inetCycleEndTime - inetCycleStartTime;
-      let cellDuration = null;
-      let matchedCellTimestamp = '';
-      if (cellCycleStartTime && Math.abs(inetCycleStartTime - cellCycleStartTime) < 15000) {
-        cellDuration = cellCycleEndTime - cellCycleStartTime;
-        matchedCellTimestamp = cellCycleStartTimestamp;
-      }
-
-      performanceTracker.matchedPoints.push({
-        timestamp: inetCycleStartTimestamp,
-        isPass: isPass,
-        inetDuration: inetDuration,
-        cellDuration: cellDuration,
-        cellTimestamp: matchedCellTimestamp,
-        inetTime: inetCycleStartTime,
-        cellTime: cellCycleStartTime
-      });
-
-      if (performanceTracker.matchedPoints.length > 200) {
-        performanceTracker.matchedPoints.shift();
-      }
+      performanceTracker.matchedPoints = reconstructHistoryCycles();
       savePerformanceTrackerToLocalStorage();
       if (panePerf && panePerf.classList.contains('active')) {
         drawPerformanceChart();
@@ -3171,13 +3162,8 @@ if (btnClearInetConsole) {
     inetConsoleHistory = [];
     localStorage.removeItem('inet_console_history');
     
-    // Set inetDuration = null for all matchedPoints
-    performanceTracker.matchedPoints.forEach(pt => {
-      pt.inetDuration = null;
-    });
-    // Filter out points where both durations are null
-    performanceTracker.matchedPoints = performanceTracker.matchedPoints.filter(pt => pt.inetDuration !== null || pt.cellDuration !== null);
-    
+    // Recalculate matched points (will filter out all internet points since history is empty)
+    performanceTracker.matchedPoints = reconstructHistoryCycles();
     savePerformanceTrackerToLocalStorage();
     
     clearMqttPayloadBadge();
@@ -3244,12 +3230,20 @@ if (btnDebugClearAll) {
     cellConsoleHistory = [];
     localStorage.removeItem('cell_console_history');
 
+    // Clear performance tracker matched points
+    performanceTracker.matchedPoints = [];
+    savePerformanceTrackerToLocalStorage();
+
     // Visual feedback
     const origText = btnDebugClearAll.textContent;
     btnDebugClearAll.textContent = '✔ Consoles Cleared!';
     setTimeout(() => {
       btnDebugClearAll.textContent = origText;
     }, 1500);
+    
+    if (panePerf && panePerf.classList.contains('active')) {
+      drawPerformanceChart();
+    }
   });
 }
 
@@ -5127,13 +5121,8 @@ if (btnClearCellConsole) {
     cellConsoleHistory = [];
     localStorage.removeItem('cell_console_history');
     
-    // Set cellDuration = null for all matchedPoints
-    performanceTracker.matchedPoints.forEach(pt => {
-      pt.cellDuration = null;
-    });
-    // Filter out points where both durations are null
-    performanceTracker.matchedPoints = performanceTracker.matchedPoints.filter(pt => pt.inetDuration !== null || pt.cellDuration !== null);
-    
+    // Recalculate matched points (will filter out all cellular points since history is empty)
+    performanceTracker.matchedPoints = reconstructHistoryCycles();
     savePerformanceTrackerToLocalStorage();
     
     if (panePerf && panePerf.classList.contains('active')) {
@@ -5543,14 +5532,11 @@ function savePerformanceTrackerToLocalStorage() {
 }
 
 function initializePerformanceTrackerFromHistory() {
-  const savedPoints = localStorage.getItem('perf_matched_points');
-  if (savedPoints) {
-    try {
-      performanceTracker.matchedPoints = JSON.parse(savedPoints);
-    } catch (e) {
-      performanceTracker.matchedPoints = [];
-    }
-  } else {
+  try {
+    performanceTracker.matchedPoints = reconstructHistoryCycles();
+    savePerformanceTrackerToLocalStorage();
+  } catch (e) {
+    console.error('Failed to initialize performance tracker from history:', e);
     performanceTracker.matchedPoints = [];
   }
 }
@@ -5568,8 +5554,7 @@ function drawPerformanceChart() {
 
   const ctx = canvas.getContext('2d');
   
-  // Reconstruct performance points dynamically directly from log histories
-  performanceTracker.matchedPoints = reconstructHistoryCycles();
+  // Use cached matched points to avoid redundant log parsing on every draw/hover/resize/zoom
   
   // Get zoom value
   const zoomSlider = document.getElementById('perf-zoom-slider');

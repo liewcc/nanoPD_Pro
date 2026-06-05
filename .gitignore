@@ -22,3 +22,6 @@ package-lock.json
 .env
 .env.*
 !/sys_img/
+
+# Temporary / Scratch directories
+scratch/

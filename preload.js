@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   selectDirectory: (defaultPath) => ipcRenderer.invoke('select-directory', defaultPath),
   readLocalFile: () => ipcRenderer.invoke('read-local-file'),
-  writeLocalFile: (content) => ipcRenderer.invoke('write-local-file', content)
+  writeLocalFile: (content) => ipcRenderer.invoke('write-local-file', content),
+  getLastPaths: () => ipcRenderer.invoke('get-last-paths'),
+  saveLastPaths: (patches) => ipcRenderer.invoke('save-last-paths', patches)
 });
 

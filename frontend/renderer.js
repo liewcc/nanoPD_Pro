@@ -6488,13 +6488,17 @@ function mcufsInitEvents() {
   const localPathInput = document.getElementById('mcufs-local-path');
   if (localPathInput) {
     localPathInput.addEventListener('change', async () => {
-      const path = localPathInput.value.trim();
-      if (!path) return;
+      const pathVal = localPathInput.value.trim();
+      if (!pathVal) return;
+      // Persist the manually-typed local path
+      if (window.electronAPI && window.electronAPI.saveLastPaths) {
+        window.electronAPI.saveLastPaths({ mcufs_local_path: pathVal });
+      }
       try {
         const res = await fetch(`${BASE_URL}/api/mcufs/set_path`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path })
+          body: JSON.stringify({ path: pathVal })
         });
         if (res.ok) {
           mcufsLoadLocalTree();
@@ -6952,4 +6956,76 @@ if (btnReplRun && replCodeInput && replOutputDisplay) {
 }
 
 
+// ==========================================
+// Startup: Restore Last-Used Paths
+// ==========================================
 
+(async function restoreLastPaths() {
+  if (!window.electronAPI || !window.electronAPI.getLastPaths) return;
+
+  let lastPaths = {};
+  try {
+    lastPaths = await window.electronAPI.getLastPaths();
+  } catch (e) {
+    console.warn('[Restore] Failed to get last paths:', e);
+    return;
+  }
+
+  // --- MCU File System: restore local path ---
+  if (lastPaths.mcufs_local_path) {
+    const localPathInput = document.getElementById('mcufs-local-path');
+    if (localPathInput && !localPathInput.value) {
+      localPathInput.value = lastPaths.mcufs_local_path;
+      // Push to backend silently
+      try {
+        await fetch(`${BASE_URL}/api/mcufs/set_path`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: lastPaths.mcufs_local_path })
+        });
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  // --- REPL Console: restore code content ---
+  if (lastPaths.repl_code !== undefined) {
+    const codeInput = document.getElementById('repl-code-input');
+    if (codeInput && !codeInput.value) {
+      codeInput.value = lastPaths.repl_code;
+    }
+  }
+
+  // --- REPL Console: restore timeout setting ---
+  if (lastPaths.repl_timeout !== undefined) {
+    const timeoutNum = document.getElementById('repl-timeout-num');
+    const timeoutSlider = document.getElementById('repl-timeout-slider');
+    if (timeoutNum) timeoutNum.value = lastPaths.repl_timeout;
+    if (timeoutSlider) timeoutSlider.value = Math.min(lastPaths.repl_timeout, 600);
+  }
+
+  // --- REPL Console: auto-save code on change (debounced) ---
+  const codeInput = document.getElementById('repl-code-input');
+  if (codeInput && window.electronAPI.saveLastPaths) {
+    let replSaveTimer = null;
+    codeInput.addEventListener('input', () => {
+      clearTimeout(replSaveTimer);
+      replSaveTimer = setTimeout(() => {
+        window.electronAPI.saveLastPaths({ repl_code: codeInput.value });
+      }, 1000);
+    });
+  }
+
+  // --- REPL Console: auto-save timeout on change ---
+  const timeoutNum = document.getElementById('repl-timeout-num');
+  const timeoutSlider = document.getElementById('repl-timeout-slider');
+  if (timeoutNum && window.electronAPI.saveLastPaths) {
+    timeoutNum.addEventListener('change', () => {
+      window.electronAPI.saveLastPaths({ repl_timeout: parseInt(timeoutNum.value) || 30 });
+    });
+  }
+  if (timeoutSlider && window.electronAPI.saveLastPaths) {
+    timeoutSlider.addEventListener('change', () => {
+      window.electronAPI.saveLastPaths({ repl_timeout: parseInt(timeoutSlider.value) || 30 });
+    });
+  }
+})();

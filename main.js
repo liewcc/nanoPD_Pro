@@ -2,6 +2,38 @@ const { app, BrowserWindow, ipcMain, Tray, Menu } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
+const fs = require('fs');
+
+// ─── Config helpers ─────────────────────────────────────────────────────────
+const CONFIG_PATH = path.join(__dirname, 'data', 'system_config.json');
+
+function readConfig() {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    }
+  } catch (e) {
+    console.error('[Main] readConfig error:', e);
+  }
+  return {};
+}
+
+function writeConfig(data) {
+  try {
+    const dataDir = path.dirname(CONFIG_PATH);
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[Main] writeConfig error:', e);
+  }
+}
+
+function persistLastPath(key, value) {
+  const cfg = readConfig();
+  if (!cfg.last_paths) cfg.last_paths = {};
+  cfg.last_paths[key] = value;
+  writeConfig(cfg);
+}
 
 let mainWindow = null;
 let pythonProcess = null;
@@ -330,33 +362,44 @@ ipcMain.handle('open-external', async (event, url) => {
 
 ipcMain.handle('select-directory', async (event, defaultPath) => {
   const { dialog } = require('electron');
+  // Use provided defaultPath, or fall back to last persisted mcufs_local_path
+  const cfg = readConfig();
+  const fallback = (cfg.last_paths && cfg.last_paths.mcufs_local_path) || undefined;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    defaultPath: defaultPath || undefined
+    defaultPath: defaultPath || fallback
   });
   if (result.canceled) {
     return null;
   } else {
-    return result.filePaths[0];
+    const selected = result.filePaths[0];
+    persistLastPath('mcufs_local_path', selected);
+    return selected;
   }
 });
 
 ipcMain.handle('read-local-file', async () => {
   const { dialog } = require('electron');
-  const fs = require('fs');
+  const cfg = readConfig();
+  const lastDir = (cfg.last_paths && cfg.last_paths.repl_last_dir) || undefined;
   const result = await dialog.showOpenDialog(mainWindow, {
     filters: [
       { name: 'Python Files', extensions: ['py'] },
       { name: 'All Files', extensions: ['*'] }
     ],
-    properties: ['openFile']
+    properties: ['openFile'],
+    defaultPath: lastDir
   });
   if (result.canceled || result.filePaths.length === 0) {
     return null;
   }
   try {
-    const content = fs.readFileSync(result.filePaths[0], 'utf8');
-    return { path: result.filePaths[0], content };
+    const filePath = result.filePaths[0];
+    // Persist directory and last file path
+    persistLastPath('repl_last_dir', path.dirname(filePath));
+    persistLastPath('repl_last_file_path', filePath);
+    const content = fs.readFileSync(filePath, 'utf8');
+    return { path: filePath, content };
   } catch (e) {
     console.error(e);
     return { error: e.message };
@@ -365,19 +408,24 @@ ipcMain.handle('read-local-file', async () => {
 
 ipcMain.handle('write-local-file', async (event, content) => {
   const { dialog } = require('electron');
-  const fs = require('fs');
+  const cfg = readConfig();
+  const lastDir = (cfg.last_paths && cfg.last_paths.repl_last_dir) || undefined;
+  const defaultName = lastDir ? path.join(lastDir, 'script.py') : 'script.py';
   const result = await dialog.showSaveDialog(mainWindow, {
     filters: [
       { name: 'Python Files', extensions: ['py'] },
       { name: 'All Files', extensions: ['*'] }
     ],
-    defaultPath: 'script.py'
+    defaultPath: defaultName
   });
   if (result.canceled || !result.filePath) {
     return null;
   }
   try {
     fs.writeFileSync(result.filePath, content, 'utf8');
+    // Persist directory and last saved path
+    persistLastPath('repl_last_dir', path.dirname(result.filePath));
+    persistLastPath('repl_last_file_path', result.filePath);
     return { path: result.filePath };
   } catch (e) {
     console.error(e);
@@ -386,8 +434,20 @@ ipcMain.handle('write-local-file', async (event, content) => {
 });
 
 
+// Get / Save last-used paths (REPL + MCU FS)
+ipcMain.handle('get-last-paths', () => {
+  const cfg = readConfig();
+  return cfg.last_paths || {};
+});
+
+ipcMain.handle('save-last-paths', (event, patches) => {
+  const cfg = readConfig();
+  cfg.last_paths = Object.assign(cfg.last_paths || {}, patches);
+  writeConfig(cfg);
+  return true;
+});
+
 ipcMain.on('log-error', (event, errorText) => {
-  const fs = require('fs');
   const logFile = path.join(__dirname, 'backend.log');
   try { fs.appendFileSync(logFile, `[Renderer Error] ${errorText}\n`); } catch (e) {}
 });

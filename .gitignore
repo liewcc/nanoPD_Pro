@@ -25,3 +25,8 @@ package-lock.json
 
 # Temporary / Scratch directories
 scratch/
+
+# Forbid pushing these folders
+mcu/
+src/
+

@@ -16,5 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeMqttLog: (content) => ipcRenderer.invoke('write-mqtt-log', content),
   saveSystemConfig: (configData) => ipcRenderer.invoke('save-system-config', configData),
   loadSystemConfig: () => ipcRenderer.invoke('load-system-config'),
-  openExternal: (url) => ipcRenderer.invoke('open-external', url)
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  selectDirectory: (defaultPath) => ipcRenderer.invoke('select-directory', defaultPath),
+  readLocalFile: () => ipcRenderer.invoke('read-local-file'),
+  writeLocalFile: (content) => ipcRenderer.invoke('write-local-file', content)
 });
+

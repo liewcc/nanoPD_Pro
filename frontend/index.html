@@ -41,6 +41,12 @@
         <a href="#" class="menu-item" id="nav-mqtt">
           <span class="menu-icon">📡</span> MQTT Tool
         </a>
+        <a href="#" class="menu-item" id="nav-mcu-fs">
+          <span class="menu-icon">📁</span> MCU File System
+        </a>
+        <a href="#" class="menu-item" id="nav-repl-console">
+          <span class="menu-icon">💻</span> REPL Console
+        </a>
         <a href="#" class="menu-item" id="nav-system-config">
           <span class="menu-icon">⚙️</span> System Config
         </a>
@@ -1037,7 +1043,13 @@
             <!-- Canvas Latency Plot Card -->
             <div class="perf-chart-card glass" style="display: flex; flex-direction: column; gap: 12px; padding: 24px; border-radius: 12px; flex-grow: 1; min-height: 420px; min-width: 0; background: rgba(22, 27, 34, 0.45); border: 1px solid var(--border);">
               <div class="perf-chart-header" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                <div class="panel-section-title" style="color: var(--accent); font-size: 14px; margin: 0;">Performance Graph: <b>Sync Delay Trends</b></div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <div class="panel-section-title" style="color: var(--accent); font-size: 14px; margin: 0;">Performance Graph: <b>Sync Delay Trends</b></div>
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <button id="btn-perf-reload" class="btn-clear" title="Re-scan all MQTT logs and rebuild chart">⟳ Reload</button>
+                    <button id="btn-perf-clear" class="btn-clear" title="Clear performance event buffer">🗑 Clear Buffer</button>
+                  </div>
+                </div>
                 <div class="perf-zoom-container" style="display: flex; align-items: center; gap: 8px;">
                   <span style="font-size: 12px; color: var(--text-muted); font-family: var(--font-sans);">Zoom:</span>
                   <input type="range" id="perf-zoom-slider" min="1" max="10" step="0.1" value="1" style="width: 120px; cursor: pointer; accent-color: var(--accent);">
@@ -1047,6 +1059,131 @@
                 <canvas id="perf-latency-canvas" style="display: block; height: 100%; min-height: 350px; background-color: #0c0c0d; border-radius: 8px;"></canvas>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MCU File System View -->
+      <section class="view-pane" id="view-mcu-fs">
+        <!-- COM Port Status Card -->
+        <div class="com-port-card glass">
+          <div class="com-port-left"></div>
+          <div class="com-port-right">
+            <span class="job-status-badge conn-badge-disconnected mqtt-status" style="cursor: default;">MQTT</span>
+            <span class="job-status-badge" style="background-color: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); letter-spacing: 0.5px;">PORT: <span class="display-port">---</span></span>
+            <span class="job-status-badge conn-badge-connected electron-status" style="cursor: default;">ELECTRON</span>
+            <span class="job-status-badge conn-badge-disconnected backend-status" style="cursor: default;">FASTAPI</span>
+          </div>
+        </div>
+
+        <!-- MCU File System Three-Panel Layout -->
+        <div class="mcufs-panels">
+          <!-- Control Panel (20%) -->
+          <div class="com-left-card mcufs-panel mcufs-control">
+            <div class="panel-section-title">🎛️ Control</div>
+
+            <!-- Device Status Ring -->
+            <div class="mcufs-device-status">
+              <div class="mcufs-status-ring offline">
+                <span class="mcufs-status-text">- -</span>
+              </div>
+              <div class="mcufs-status-label">Device Offline</div>
+            </div>
+
+            <!-- Local Path -->
+            <div class="mcufs-section">
+              <div class="mcufs-section-title">LOCAL PATH</div>
+              <div class="mcufs-path-row">
+                <input type="text" id="mcufs-local-path" class="form-input" value="D:/AI/nanoPD/mcu" style="flex: 1;">
+                <button id="btn-mcufs-browse" class="btn btn-secondary" style="width: auto; padding: 8px 10px;" title="Browse folder">📁</button>
+              </div>
+
+              <div class="mcufs-btn-row">
+                <button id="btn-mcufs-view-local" class="btn btn-secondary" style="flex: 1;">📂 View Local Folder</button>
+                <button id="btn-mcufs-refresh" class="btn btn-secondary" style="flex: 1;">🔄 Refresh Drives</button>
+              </div>
+
+              <button id="btn-mcufs-mount" class="btn btn-secondary">🔌 Mount Virtual Drive</button>
+              <button id="btn-mcufs-push" class="btn btn-primary" style="box-shadow: none;">Push to MCU</button>
+              <button id="btn-mcufs-pull" class="btn btn-secondary">Pull from MCU</button>
+              <button id="btn-mcufs-format" class="btn btn-danger-outline">Format MCU Flash</button>
+
+              <div class="mcufs-btn-row">
+                <button id="btn-mcufs-select-delete" class="btn btn-secondary" style="flex: 1;">Select files to delete</button>
+                <button id="btn-mcufs-cancel-delete" class="btn btn-secondary" style="flex: 1;">Cancel</button>
+              </div>
+            </div>
+
+            <!-- BOOTSEL -->
+            <div class="mcufs-section">
+              <div class="mcufs-section-title">BOOTSEL</div>
+              <button id="btn-mcufs-vdisk-reset" class="btn btn-secondary">💾 Virtual Disk Reset</button>
+              <button id="btn-mcufs-mcu-reset" class="btn btn-secondary">🔄 MCU Reset</button>
+            </div>
+          </div>
+
+          <!-- Local Panel (40%) -->
+          <div class="com-left-card mcufs-panel mcufs-local">
+            <div class="panel-section-title">💻 Local</div>
+            <div id="mcufs-local-tree" class="mcufs-tree-container"></div>
+          </div>
+
+          <!-- MCU Flash Panel (40%) -->
+          <div class="com-left-card mcufs-panel mcufs-flash">
+            <div class="panel-section-title">🔧 MCU Flash</div>
+            <div id="mcufs-mcu-tree" class="mcufs-tree-container"></div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- REPL Console View -->
+      <section class="view-pane" id="view-repl-console">
+        <!-- COM Port Status Card -->
+        <div class="com-port-card glass">
+          <div class="com-port-left"></div>
+          <div class="com-port-right">
+            <span class="job-status-badge conn-badge-disconnected mqtt-status" style="cursor: default;">MQTT</span>
+            <span class="job-status-badge" style="background-color: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); letter-spacing: 0.5px;">PORT: <span class="display-port">---</span></span>
+            <span class="job-status-badge conn-badge-connected electron-status" style="cursor: default;">ELECTRON</span>
+            <span class="job-status-badge conn-badge-disconnected backend-status" style="cursor: default;">FASTAPI</span>
+          </div>
+        </div>
+
+        <!-- REPL Console Content Two-Panel Layout -->
+        <div class="mcurepl-panels">
+          <!-- Left Panel: Code & Controls (50%) -->
+          <div class="mcurepl-panel mcurepl-left">
+            <!-- Action Buttons & Timeout -->
+            <div class="com-left-card mcurepl-card mcurepl-controls">
+              <div class="mcurepl-btn-row" style="margin-bottom: 28px;">
+                <button id="btn-repl-run" class="btn btn-primary" style="flex: 1;">🚀 Run REPL</button>
+                <button id="btn-repl-save" class="btn btn-secondary" style="flex: 1;">💾 Save to Local</button>
+                <button id="btn-repl-load" class="btn btn-secondary" style="flex: 1;">📂 Load Local File</button>
+                <button id="btn-repl-clear" class="btn btn-secondary" style="flex: 1;">🗑️ Clear Output</button>
+              </div>
+              
+              <!-- Timeout Slider & Num Input -->
+              <div class="mcurepl-timeout-section" style="margin-top: 20px;">
+                <div class="mcurepl-section-title" style="font-size: 11px; font-weight: 700; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">Timeout (Seconds)</div>
+                <div class="mcurepl-timeout-row" style="display: flex; gap: 12px; align-items: center;">
+                  <input type="number" id="repl-timeout-num" class="form-input" min="1" max="3600" value="30" style="width: 80px; flex-shrink: 0; padding: 6px 10px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); outline: none;">
+                  <input type="range" id="repl-timeout-slider" min="1" max="600" value="30" style="flex: 1; accent-color: var(--accent); cursor: pointer; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px;">
+                </div>
+              </div>
+            </div>
+            
+            <!-- Code Editor Card -->
+            <div class="com-left-card mcurepl-card mcurepl-editor-card" style="flex: 1; display: flex; flex-direction: column; gap: 10px;">
+              <div class="panel-section-title">💻 CODING</div>
+              <textarea id="repl-code-input" class="mcurepl-textarea code-editor" spellcheck="false" placeholder="# Write your MicroPython code here&#10;print('Hello from NanoPD!')" style="flex: 1; min-height: 200px;"></textarea>
+            </div>
+          </div>
+          
+          <!-- Right Panel: MCU Output (50%) -->
+          <div class="com-left-card mcurepl-panel mcurepl-right" style="display: flex; flex-direction: column; gap: 10px;">
+            <div class="panel-section-title">🔧 MCU OUTPUT</div>
+            <textarea id="repl-output-display" class="mcurepl-textarea output-log" readonly placeholder="(waiting for execution...)" style="flex: 1; min-height: 200px;"></textarea>
           </div>
         </div>
       </section>
@@ -1157,6 +1294,35 @@
       </section>
     </main>
   </div>
+  <!-- File Viewer Modal -->
+  <div id="mcufs-viewer-modal" class="mcufs-modal-overlay" style="display: none;">
+    <div class="mcufs-modal-container glass">
+      <div class="mcufs-modal-header">
+        <h3 id="mcufs-modal-title">File Viewer</h3>
+        <button id="btn-mcufs-modal-close" class="btn-close" style="background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; padding: 0 5px; line-height: 1;">&times;</button>
+      </div>
+      <div class="mcufs-modal-body">
+        <div id="mcufs-modal-meta" class="mcufs-modal-meta" style="margin-bottom: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all;">Path: <span id="mcufs-modal-path-text">---</span></div>
+        
+        <div id="mcufs-modal-text-content" class="mcufs-modal-content-area text-content" style="display: none;">
+          <pre style="margin: 0; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 6px; overflow: auto; max-height: 450px;"><code id="mcufs-modal-code-block" style="font-family: var(--font-mono); font-size: 13px; color: var(--text); line-height: 1.4; white-space: pre-wrap; word-break: break-all;"></code></pre>
+        </div>
+        
+        <div id="mcufs-modal-image-content" class="mcufs-modal-content-area image-content" style="display: none; text-align: center; padding: 10px;">
+          <img id="mcufs-modal-img" src="" alt="File preview" style="max-width: 100%; max-height: 400px; border-radius: 6px; border: 1px solid var(--border);">
+        </div>
+        
+        <div id="mcufs-modal-binary-content" class="mcufs-modal-content-area binary-content" style="display: none; text-align: center; padding: 30px 10px;">
+          <div class="binary-warning">
+            <span class="warning-icon" style="font-size: 40px; display: block; margin-bottom: 15px;">⚠️</span>
+            <p style="color: var(--text-muted); margin-bottom: 20px;">This is a binary file and cannot be previewed.</p>
+            <button id="btn-mcufs-modal-download" class="btn btn-primary" style="margin: 0 auto; display: inline-block;">Download File</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="renderer.js"></script>
 </body>
 </html>

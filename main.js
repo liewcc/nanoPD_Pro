@@ -328,6 +328,64 @@ ipcMain.handle('open-external', async (event, url) => {
   }
 });
 
+ipcMain.handle('select-directory', async (event, defaultPath) => {
+  const { dialog } = require('electron');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    defaultPath: defaultPath || undefined
+  });
+  if (result.canceled) {
+    return null;
+  } else {
+    return result.filePaths[0];
+  }
+});
+
+ipcMain.handle('read-local-file', async () => {
+  const { dialog } = require('electron');
+  const fs = require('fs');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    filters: [
+      { name: 'Python Files', extensions: ['py'] },
+      { name: 'All Files', extensions: ['*'] }
+    ],
+    properties: ['openFile']
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  try {
+    const content = fs.readFileSync(result.filePaths[0], 'utf8');
+    return { path: result.filePaths[0], content };
+  } catch (e) {
+    console.error(e);
+    return { error: e.message };
+  }
+});
+
+ipcMain.handle('write-local-file', async (event, content) => {
+  const { dialog } = require('electron');
+  const fs = require('fs');
+  const result = await dialog.showSaveDialog(mainWindow, {
+    filters: [
+      { name: 'Python Files', extensions: ['py'] },
+      { name: 'All Files', extensions: ['*'] }
+    ],
+    defaultPath: 'script.py'
+  });
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+  try {
+    fs.writeFileSync(result.filePath, content, 'utf8');
+    return { path: result.filePath };
+  } catch (e) {
+    console.error(e);
+    return { error: e.message };
+  }
+});
+
+
 ipcMain.on('log-error', (event, errorText) => {
   const fs = require('fs');
   const logFile = path.join(__dirname, 'backend.log');

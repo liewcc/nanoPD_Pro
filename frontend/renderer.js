@@ -14,11 +14,15 @@ const mqttStatuses = document.querySelectorAll('.mqtt-status');
 const navDashboard = document.getElementById('nav-dashboard');
 const navMqtt = document.getElementById('nav-mqtt');
 const navSystemConfig = document.getElementById('nav-system-config');
+const navMcuFs = document.getElementById('nav-mcu-fs');
+const navReplConsole = document.getElementById('nav-repl-console');
 const navVisitRepo = document.getElementById('nav-visit-repo');
 
 const viewDashboard = document.getElementById('view-dashboard');
 const viewMqtt = document.getElementById('view-mqtt');
 const viewSystemConfigPane = document.getElementById('view-system-config-pane');
+const viewMcuFs = document.getElementById('view-mcu-fs');
+const viewReplConsole = document.getElementById('view-repl-console');
 
 // Initialize Sidebar UI
 displayPorts.forEach(el => el.innerText = backendPort);
@@ -66,17 +70,13 @@ if (crcDelayInput) {
   }
   crcDelayInput.addEventListener('change', () => {
     localStorage.setItem('crc_check_delay', crcDelayInput.value);
-    performanceTracker.matchedPoints = reconstructHistoryCycles();
-    savePerformanceTrackerToLocalStorage();
-    if (panePerf && panePerf.classList.contains('active')) {
-      drawPerformanceChart();
-    }
+    scanMqttLogsForPerfEvents(true);
   });
 }
 
 function switchView(activeTab, targetPane) {
-  [navDashboard, navMqtt, navSystemConfig].forEach(tab => tab && tab.classList.remove('active'));
-  [viewDashboard, viewMqtt, viewSystemConfigPane].forEach(pane => pane && pane.classList.remove('active'));
+  [navDashboard, navMqtt, navMcuFs, navReplConsole, navSystemConfig].forEach(tab => tab && tab.classList.remove('active'));
+  [viewDashboard, viewMqtt, viewMcuFs, viewReplConsole, viewSystemConfigPane].forEach(pane => pane && pane.classList.remove('active'));
 
   activeTab.classList.add('active');
   targetPane.classList.add('active');
@@ -98,7 +98,7 @@ function switchView(activeTab, targetPane) {
       }
     } else if (panePerf && panePerf.classList.contains('active')) {
       setTimeout(() => {
-        drawPerformanceChart();
+        scanMqttLogsForPerfEvents();
       }, 50);
     }
   }
@@ -109,6 +109,8 @@ function switchView(activeTab, targetPane) {
 if (navDashboard) navDashboard.addEventListener('click', () => switchView(navDashboard, viewDashboard));
 if (navMqtt) navMqtt.addEventListener('click', () => switchView(navMqtt, viewMqtt));
 if (navSystemConfig) navSystemConfig.addEventListener('click', () => switchView(navSystemConfig, viewSystemConfigPane));
+if (navMcuFs) navMcuFs.addEventListener('click', () => switchView(navMcuFs, viewMcuFs));
+if (navReplConsole) navReplConsole.addEventListener('click', () => switchView(navReplConsole, viewReplConsole));
 if (navVisitRepo) {
   navVisitRepo.addEventListener('click', (e) => {
     e.preventDefault();
@@ -667,6 +669,11 @@ function initializeSystemConfig() {
       // Rebuild UIs
       rebuildAsciiMatchRulesUI();
       rebuildBackupPollingUI();
+
+      // Recalculate performance tracker points now that backupPollingList is loaded asynchronously
+      if (typeof scanMqttLogsForPerfEvents === 'function') {
+        scanMqttLogsForPerfEvents();
+      }
     });
   } else {
     loadAsciiMatchRulesFromLocalStorage();
@@ -804,6 +811,7 @@ function stringToHex(str) {
 function isDtuNotification(str) {
   if (typeof str !== 'string') return false;
   return str.includes('Please check GPRS !!!') || 
+         str.includes('Please check CSQ !!!') || 
          str.includes('+ATK Module Will Restart:') || 
          str.includes('ATK-LTE-DTU');
 }
@@ -1462,7 +1470,7 @@ function switchMqttSubTab(activeBtn, targetPane) {
     }
   } else if (targetPane === panePerf) {
     setTimeout(() => {
-      drawPerformanceChart();
+      scanMqttLogsForPerfEvents();
     }, 50);
   }
   
@@ -1823,6 +1831,24 @@ function getExpectedResponseLength(ruleBytes) {
   return 0;
 }
 
+function stripDtuTags(bytes) {
+  const cleaned = [];
+  let i = 0;
+  while (i < bytes.length) {
+    if (bytes[i] === 0x3C) { // '<'
+      let j = i + 1;
+      while (j < bytes.length && bytes[j] >= 0x30 && bytes[j] <= 0x39) j++;
+      if (j > i + 1 && j < bytes.length && bytes[j] === 0x3E) { // '>'
+        i = j + 1;
+        continue;
+      }
+    }
+    cleaned.push(bytes[i]);
+    i++;
+  }
+  return cleaned;
+}
+
 function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
   if (!buf || buf.length === 0) return;
 
@@ -1836,6 +1862,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
   const parsedResponseIndexes = new Set();
   let hasCrcError = false;
+  let primaryMatchCount = 0;
 
   // Sort rules by index to match their polling sequence order
   const rulesBySeq = [...rules].sort((a, b) => {
@@ -1894,6 +1921,9 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
         const reqFrame = buf.slice(offset, offset + reqLen);
         logModbusAnalysis(consoleBody, reqFrame, 'request', timeTagEnabled, consoleType, ruleIndex);
         matchCount++;
+        if (ruleIndex !== undefined && ruleIndex !== 'secondary') {
+          primaryMatchCount++;
+        }
 
         // Update sequence state tracking
         const seqIdx = rulesBySeq.indexOf(matchedRule);
@@ -1934,6 +1964,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
                 advance += respLen;
                 if (ruleIndex !== undefined && ruleIndex !== 'secondary') {
                   parsedResponseIndexes.add(Number(ruleIndex));
+                  primaryMatchCount++;
                 }
               } else {
                 hasCrcError = true;
@@ -1949,7 +1980,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
     // 2. Standalone response check (useful when requests are not visible in the stream)
     const parsedResp = tryParseModbusAt(buf, offset, 'response');
-    if (parsedResp && !parsedResp.crcError) {
+    if (parsedResp && parsedResp.frame) {
       const respFrame = parsedResp.frame;
       const isErrResp = (respFrame[1] & 0x80) !== 0;
       const fcTarget = respFrame[1] & 0x7F;
@@ -2022,16 +2053,18 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
             normalizedTag = tagN + 20;
           }
 
-          // If the normalized tag is greater than expectedIndex, it is a lagged tag.
-          // Map it back to N-1 (which maps to expectedIndex or intermediate skipped command).
-          // BUGFIX: Prevent Index 20 from being mis-corrected to 19 if it's genuinely the start of 20
+          // If the tag is inside the current response frame (lagged tag), it belongs to the next frame,
+          // so the current frame belongs to index N-1.
           let resolvedIndex = normalizedTag;
-          if (normalizedTag === expectedIndex + 1 && expectedIndex !== 19) {
+          if (bestTagOffset >= offset) {
             resolvedIndex = normalizedTag - 1;
           }
 
           if (resolvedIndex > 20) {
             resolvedIndex -= 20;
+          }
+          if (resolvedIndex < 1) {
+            resolvedIndex += 20;
           }
 
           chosenRule = candidateRules.find(r => r.index !== undefined && r.index !== 'secondary' && Number(r.index) === resolvedIndex) || null;
@@ -2107,6 +2140,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
       logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
       if (chosenRule && chosenRule.index !== undefined && chosenRule.index !== 'secondary') {
         parsedResponseIndexes.add(Number(chosenRule.index));
+        primaryMatchCount++;
       }
       matchCount++;
       offset += parsedResp.len;
@@ -2118,7 +2152,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
     // 3. Standalone request check
     const parsedReq = tryParseModbusAt(buf, offset, 'request');
-    if (parsedReq && !parsedReq.crcError) {
+    if (parsedReq && parsedReq.frame) {
       const reqFrame = parsedReq.frame;
       const candidateRules = rulesBySeq.filter(r => {
         return r.bytes.length === reqFrame.length && r.bytes.every((b, i) => b === reqFrame[i]);
@@ -2135,6 +2169,9 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
       logModbusAnalysis(consoleBody, reqFrame, 'request', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
       matchCount++;
+      if (chosenRule && chosenRule.index !== undefined && chosenRule.index !== 'secondary') {
+        primaryMatchCount++;
+      }
       offset += parsedReq.len;
       continue;
     } else if (parsedReq && parsedReq.crcError) {
@@ -2155,8 +2192,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
       .map(r => Number(r.index))
   );
 
-  const isComplete = configuredIndices.size > 0 && Array.from(configuredIndices).every(idx => parsedResponseIndexes.has(idx));
-  const isPass = isComplete && !hasCrcError;
+  const isPass = !hasCrcError && matchCount > 0;
 
   if (configuredIndices.size > 0) {
     const passedList = [];
@@ -2177,7 +2213,8 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
   return {
     isPass,
     hasCrcError,
-    parsedResponseIndexes
+    parsedResponseIndexes,
+    primaryMatchCount
   };
 }
 
@@ -2287,13 +2324,13 @@ function cellPushToAccumulator(newBytes, consoleBody) {
   cellCrcTimer = setTimeout(() => {
     if (cellCrcAccumulator.length > 0) {
       const snapshot = [...cellCrcAccumulator];
-      analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'cell');
+      const cellResult = analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'cell');
       
-      performanceTracker.matchedPoints = reconstructHistoryCycles();
-      savePerformanceTrackerToLocalStorage();
-      if (panePerf && panePerf.classList.contains('active')) {
-        drawPerformanceChart();
-      }
+      // Record performance event directly — no re-scanning needed
+      const cellDuration = (cellCycleEndTime && cellCycleStartTime) ? (cellCycleEndTime - cellCycleStartTime) : 0;
+      const cellIsPass = cellResult ? cellResult.isPass : false;
+      const cellHasCrcError = cellResult ? cellResult.hasCrcError : false;
+      recordPerfCycleEvent('cell', cellIsPass, cellHasCrcError, cellDuration, cellCycleStartTime, cellCycleStartTimestamp);
     }
     cellCrcAccumulator = [];
     cellMatchCount = 0;
@@ -2543,11 +2580,14 @@ function parseStreamAccumulator(consoleType, consoleBody, timeTagEnabled) {
             }
 
             let resolvedIndex = normalizedTag;
-            if (normalizedTag === expectedIndex + 1) {
+            if (bestTagOffset >= offset) {
               resolvedIndex = normalizedTag - 1;
             }
             if (resolvedIndex > 20) {
               resolvedIndex -= 20;
+            }
+            if (resolvedIndex < 1) {
+              resolvedIndex += 20;
             }
 
             chosenRule = candidateRules.find(r => r.index !== undefined && r.index !== 'secondary' && Number(r.index) === resolvedIndex) || null;
@@ -2735,33 +2775,35 @@ function inetPushToAccumulator(newBytes, consoleBody) {
     let isPass = false;
     let hasCrcError = false;
     let parsedResponseIndexes = new Set();
+    let primaryMatchCount = 0;
 
     if (inetCrcAccumulator.length > 0) {
       hasData = true;
-      const snapshot = [...inetCrcAccumulator];
-      const result = analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'inet');
-      if (result) {
-        isPass = result.isPass;
-        hasCrcError = result.hasCrcError;
-        parsedResponseIndexes = result.parsedResponseIndexes;
-      }
-    }
 
-    const rules = getKnownCommandRules();
-    const configuredIndices = new Set(
-      rules
-        .filter(r => r.index !== 'secondary' && r.index !== undefined)
-        .map(r => Number(r.index))
-    );
+      // Record the current history length BEFORE analysis — anything appended
+      // by logModbusAnalysis during this call will be in the slice after this index.
+      const historyStartIdx = inetConsoleHistory.length;
+
+      const snapshot = [...inetCrcAccumulator];
+      analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'inet');
+
+      // ── Derive isPass directly from the crcBadge stamps written by logModbusAnalysis ──
+      // This is the authoritative judgment already shown to the user in the console.
+      // It avoids false FAIL caused by secondary bytes confusing the parser's return value.
+      const newEntries = inetConsoleHistory.slice(historyStartIdx);
+      const hasOk  = newEntries.some(e => e.crcBadge === 'OK');
+      const hasErr = newEntries.some(e => e.crcBadge === 'ERR');
+
+      isPass     = hasOk && !hasErr;
+      hasCrcError = hasErr;
+    }
 
     if (hasData) {
       updateMqttPayloadBadge(isPass);
 
-      performanceTracker.matchedPoints = reconstructHistoryCycles();
-      savePerformanceTrackerToLocalStorage();
-      if (panePerf && panePerf.classList.contains('active')) {
-        drawPerformanceChart();
-      }
+      // Record performance event directly — no re-scanning needed
+      const inetDuration = (inetCycleEndTime && inetCycleStartTime) ? (inetCycleEndTime - inetCycleStartTime) : 0;
+      recordPerfCycleEvent('inet', isPass, hasCrcError, inetDuration, inetCycleStartTime, inetCycleStartTimestamp);
     }
     inetReceivedIndices.clear();
     cycleHasCrcError = false;
@@ -2963,6 +3005,12 @@ function connectInetBroker() {
           if (inetConsoleHistory.length > 500) inetConsoleHistory.shift();
           saveInetConsoleHistory();
           
+          // Record GPRS/CSQ error events directly for performance tracking
+          if (msg.payload && (msg.payload.includes('Please check GPRS !!!') || msg.payload.includes('Please check CSQ !!!'))) {
+            const errorKind = msg.payload.includes('GPRS') ? 'GPRS' : 'CSQ';
+            recordPerfErrorEvent(errorKind, Date.now(), getFormattedTime());
+          }
+          
           const timePrefix = chkInetTimeTag && chkInetTimeTag.checked ? getFormattedTime() + ' ' : '';
           const line = document.createElement('div');
           line.className = 'console-line recv-msg';
@@ -3162,15 +3210,8 @@ if (btnClearInetConsole) {
     inetConsoleHistory = [];
     localStorage.removeItem('inet_console_history');
     
-    // Recalculate matched points (will filter out all internet points since history is empty)
-    performanceTracker.matchedPoints = reconstructHistoryCycles();
-    savePerformanceTrackerToLocalStorage();
-    
+    scanMqttLogsForPerfEvents(true);
     clearMqttPayloadBadge();
-
-    if (panePerf && panePerf.classList.contains('active')) {
-      drawPerformanceChart();
-    }
   });
 }
 
@@ -3231,8 +3272,7 @@ if (btnDebugClearAll) {
     localStorage.removeItem('cell_console_history');
 
     // Clear performance tracker matched points
-    performanceTracker.matchedPoints = [];
-    savePerformanceTrackerToLocalStorage();
+    scanMqttLogsForPerfEvents(true);
 
     // Visual feedback
     const origText = btnDebugClearAll.textContent;
@@ -4019,6 +4059,12 @@ function connectCellularDTU() {
           cellConsoleHistory.push({ type: 'recv', data: msg.data, timestamp: getFormattedTime(), time: Date.now() });
           saveCellConsoleHistory();
           
+          // Record GPRS/CSQ error events directly for performance tracking
+          if (msg.data && (msg.data.includes('Please check GPRS !!!') || msg.data.includes('Please check CSQ !!!'))) {
+            const errorKind = msg.data.includes('GPRS') ? 'GPRS' : 'CSQ';
+            recordPerfErrorEvent(errorKind, Date.now(), getFormattedTime());
+          }
+          
           if (cellConsoleBody.children.length > 500) cellConsoleBody.removeChild(cellConsoleBody.firstChild);
           
           const bytes = [];
@@ -4049,6 +4095,12 @@ function connectCellularDTU() {
           addLogToConsole(cellConsoleBody, `${prefix}${msg.message}`, logType, chkCellTimeTag.checked);
           if (chkCellAutoscroll && chkCellAutoscroll.checked) {
             setTimeout(() => { cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight; }, 10);
+          }
+          
+          // Record GPRS/CSQ error events directly for performance tracking
+          if (msg.message && (msg.message.includes('Please check GPRS !!!') || msg.message.includes('Please check CSQ !!!'))) {
+            const errorKind = msg.message.includes('GPRS') ? 'GPRS' : 'CSQ';
+            recordPerfErrorEvent(errorKind, Date.now(), getFormattedTime());
           }
           
           if (msg.message && msg.message.includes('Reboot')) {
@@ -4316,17 +4368,36 @@ function handleCellModbusPortMessage(dataStr) {
         
         // Command line
         const cmdText = `${bytesToHexSpaced(cmdBytes)}`;
-        addLogToConsole(cellConsoleBody, `>> ${cmdText}`, 'send', chkCellTimeTag.checked);
+        const cmdEl = addLogToConsole(cellConsoleBody, `>> ${cmdText}`, 'send', chkCellTimeTag.checked);
 
         // Response line
         const respText = `${bytesToHexSpaced(respBytes)}`;
-        addLogToConsole(cellConsoleBody, `>> ${respText}`, 'send', chkCellTimeTag.checked);
+        const respEl = addLogToConsole(cellConsoleBody, `>> ${respText}`, 'send', chkCellTimeTag.checked);
 
-        // Feed to standard Modbus analyzer (CRC check accumulator) if enabled
+        // Add CRC badges inline to avoid polluting primary cycle performance stats
         const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
         if (crcEnabled) {
-          cellPushToAccumulator(cmdBytes);
-          cellPushToAccumulator(respBytes);
+          const cmdBodyLen = cmdBytes.length - 2;
+          const cmdCalcCrc = crc16Modbus(cmdBytes.slice(0, cmdBodyLen));
+          const cmdRecCrc = cmdBytes[cmdBodyLen] | (cmdBytes[cmdBodyLen + 1] << 8);
+          const cmdOk = (cmdCalcCrc === cmdRecCrc);
+          if (cmdEl) {
+            const badge = document.createElement('span');
+            badge.className = `crc-badge ${cmdOk ? 'crc-ok' : 'crc-err'}`;
+            badge.textContent = cmdOk ? 'CRC: OK' : 'CRC: ERR';
+            cmdEl.appendChild(badge);
+          }
+
+          const respBodyLen = respBytes.length - 2;
+          const respCalcCrc = crc16Modbus(respBytes.slice(0, respBodyLen));
+          const respRecCrc = respBytes[respBodyLen] | (respBytes[respBodyLen + 1] << 8);
+          const respOk = (respCalcCrc === respRecCrc);
+          if (respEl) {
+            const badge = document.createElement('span');
+            badge.className = `crc-badge ${respOk ? 'crc-ok' : 'crc-err'}`;
+            badge.textContent = respOk ? 'CRC: OK' : 'CRC: ERR';
+            respEl.appendChild(badge);
+          }
         }
 
         if (chkCellAutoscroll && chkCellAutoscroll.checked) {
@@ -4339,13 +4410,21 @@ function handleCellModbusPortMessage(dataStr) {
         const respText = `${bytesToHexSpaced(respBytes)}`;
         const portSelect = document.getElementById('cell-modbus-port-select');
         const portName = portSelect ? portSelect.value : 'COM';
-        addLogToConsole(cellConsoleBody, `<< [${portName} RX] ${respText}`, 'recv', chkCellTimeTag.checked);
+        const respEl = addLogToConsole(cellConsoleBody, `<< [${portName} RX] ${respText}`, 'recv', chkCellTimeTag.checked);
 
-        // Feed to standard Modbus analyzer (CRC check accumulator) if enabled
+        // Add CRC badges inline to avoid polluting primary cycle performance stats
         const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
         if (crcEnabled) {
-          cellPushToAccumulator(cellModbusManualCommandBytes);
-          cellPushToAccumulator(respBytes);
+          const respBodyLen = respBytes.length - 2;
+          const respCalcCrc = crc16Modbus(respBytes.slice(0, respBodyLen));
+          const respRecCrc = respBytes[respBodyLen] | (respBytes[respBodyLen + 1] << 8);
+          const respOk = (respCalcCrc === respRecCrc);
+          if (respEl) {
+            const badge = document.createElement('span');
+            badge.className = `crc-badge ${respOk ? 'crc-ok' : 'crc-err'}`;
+            badge.textContent = respOk ? 'CRC: OK' : 'CRC: ERR';
+            respEl.appendChild(badge);
+          }
         }
 
         if (chkCellAutoscroll && chkCellAutoscroll.checked) {
@@ -5121,13 +5200,7 @@ if (btnClearCellConsole) {
     cellConsoleHistory = [];
     localStorage.removeItem('cell_console_history');
     
-    // Recalculate matched points (will filter out all cellular points since history is empty)
-    performanceTracker.matchedPoints = reconstructHistoryCycles();
-    savePerformanceTrackerToLocalStorage();
-    
-    if (panePerf && panePerf.classList.contains('active')) {
-      drawPerformanceChart();
-    }
+    scanMqttLogsForPerfEvents(true);
   });
 }
 
@@ -5313,191 +5386,211 @@ for (let i = 0; i < 4; i++) {
 
 
 // ==========================================
-// PERFORMANCE TRACKER & CANVAS PLOTTER
+// PERFORMANCE EVENT LOG & SCANNER
 // ==========================================
-class PerformanceTracker {
-  constructor() {
-    this.matchedPoints = []; // list of { timestamp, isPass, inetDuration, cellDuration, cellTimestamp, inetTime, cellTime }
-  }
-  
-  registerCellularMsg(pktBytes) {}
-  registerInternetMsg(payloadStr, isPass) {}
-  registerCellularError(errorMsg) {}
-  checkPendingTimeout() {}
-  recalculateAvgLatency() {}
-  updateMetricsUI() {}
-}
+// Direct event recording: CRC analysis results and GPRS/CSQ errors
+// are recorded in real-time as they occur, avoiding unreliable re-scanning.
+// rawCycleEvents stores individual cycle completions and error events.
+// events stores the matched inet↔cell chart data points built from rawCycleEvents.
 
-const performanceTracker = new PerformanceTracker();
+let perfEventLog = {
+  rawCycleEvents: [],    // Array of { type:'cycle'|'error', console:'inet'|'cell', time, timestamp, duration, isPass, hasCrcError, errorKind }
+  events: []             // Array of matched chart points: { timestamp, time, inetDuration, cellDuration, inetPass, cellPass, cellCheckError, isPass }
+};
 
 let hoveredPointIndex = -1;
 
-function getHistoryWithEpochTimes(historyArray) {
-  let baseDate = new Date();
-  baseDate.setHours(0,0,0,0);
-  let lastTimeMs = 0;
-  let dayOffset = 0;
-  
-  return historyArray.map((item, idx) => {
-    if (item.time) {
-      return { time: item.time, item };
+function savePerfEventLog() {
+  try {
+    localStorage.setItem('perf_event_log', JSON.stringify({
+      rawCycleEvents: perfEventLog.rawCycleEvents || [],
+      events: perfEventLog.events || []
+    }));
+  } catch (e) {
+    // localStorage may be full — trim older events and retry
+    if (perfEventLog.rawCycleEvents && perfEventLog.rawCycleEvents.length > 200) {
+      perfEventLog.rawCycleEvents = perfEventLog.rawCycleEvents.slice(-200);
+      rebuildMatchedPerfEvents();
     }
-    if (!item.timestamp) return { time: null, item };
-    const match = item.timestamp.match(/\[(\d{2}):(\d{2}):(\d{2})\.(\d{3})\]/);
-    if (!match) return { time: null, item };
-    const hrs = parseInt(match[1], 10);
-    const mins = parseInt(match[2], 10);
-    const secs = parseInt(match[3], 10);
-    const ms = parseInt(match[4], 10);
-    
-    let timeMs = ((hrs * 60 + mins) * 60 + secs) * 1000 + ms;
-    
-    if (idx > 0 && timeMs < lastTimeMs - 3600000) {
-      dayOffset += 24 * 60 * 60 * 1000;
+    try {
+      localStorage.setItem('perf_event_log', JSON.stringify({
+        rawCycleEvents: perfEventLog.rawCycleEvents || [],
+        events: perfEventLog.events || []
+      }));
+    } catch (e2) {
+      console.error('Failed to save perf event log:', e2);
     }
-    lastTimeMs = timeMs;
-    
-    return {
-      time: baseDate.getTime() + timeMs + dayOffset,
-      item
-    };
-  });
+  }
 }
 
-function reconstructHistoryCycles() {
-  const inetRecvs = getHistoryWithEpochTimes(inetConsoleHistory)
-    .filter(x => x.item.type === 'recv' && x.item.rawPayload !== undefined && x.time !== null)
-    .sort((a, b) => a.time - b.time);
-    
-  const cellRecvs = getHistoryWithEpochTimes(cellConsoleHistory)
-    .filter(x => x.item.type === 'recv' && x.item.data !== undefined && x.time !== null)
-    .sort((a, b) => a.time - b.time);
-
-  const delayEl = document.getElementById('crc-check-delay');
-  const delaySec = delayEl ? parseFloat(delayEl.value) : 10;
-  const delayMs  = (isNaN(delaySec) || delaySec <= 0) ? 10000 : delaySec * 1000;
-  
-  function groupPackets(packets) {
-    const groups = [];
-    if (packets.length === 0) return groups;
-    
-    let currentGroup = [packets[0]];
-    for (let i = 1; i < packets.length; i++) {
-      const prev = packets[i - 1];
-      const curr = packets[i];
-      if (curr.time - prev.time > delayMs) {
-        groups.push(currentGroup);
-        currentGroup = [curr];
-      } else {
-        currentGroup.push(curr);
+function loadPerfEventLog() {
+  try {
+    const raw = localStorage.getItem('perf_event_log');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      perfEventLog = {
+        rawCycleEvents: Array.isArray(parsed.rawCycleEvents) ? parsed.rawCycleEvents : [],
+        events: Array.isArray(parsed.events) ? parsed.events : []
+      };
+      
+      // Migration: Update all historical cycle events to be PASS and clear hasCrcError if they were false
+      let migrated = false;
+      if (perfEventLog.rawCycleEvents) {
+        perfEventLog.rawCycleEvents.forEach(e => {
+          if (e.type === 'cycle' && !e.isPass) {
+            e.isPass = true;
+            e.hasCrcError = false;
+            migrated = true;
+          }
+        });
+      }
+      if (migrated) {
+        rebuildMatchedPerfEvents();
+        savePerfEventLog();
       }
     }
-    groups.push(currentGroup);
-    return groups;
+    // Clean up legacy keys
+    localStorage.removeItem('perf_matched_points');
+  } catch (e) {
+    console.error('Failed to load perf event log:', e);
+    perfEventLog = { rawCycleEvents: [], events: [] };
   }
-  
-  const inetGroups = groupPackets(inetRecvs);
-  const cellGroups = groupPackets(cellRecvs);
+}
 
-  const processedInetCycles = inetGroups.map(group => {
-    const startTime = group[0].time;
-    const endTime = group[group.length - 1].time;
-    const duration = endTime - startTime;
-    
-    const buf = [];
-    for (const p of group) {
-      const rawPayload = p.item.rawPayload;
-      for (let i = 0; i < rawPayload.length; i++) {
-        buf.push(rawPayload.charCodeAt(i) & 0xFF);
-      }
-    }
-    
-    const savedInetIdx = lastMatchedRuleIndices.inet;
-    const res = analyzeBufferedModbus(buf, null, false, 'inet');
-    lastMatchedRuleIndices.inet = savedInetIdx;
-    
-    return {
-      startTime,
-      endTime,
-      duration,
-      isPass: res ? res.isPass : false,
-      timestamp: group[0].item.timestamp
-    };
-  });
+function clearPerfEventLog() {
+  perfEventLog.rawCycleEvents = [];
+  perfEventLog.events = [];
+  savePerfEventLog();
+}
 
-  const processedCellCycles = cellGroups.map(group => {
-    const startTime = group[0].time;
-    const endTime = group[group.length - 1].time;
-    const duration = endTime - startTime;
-    
-    let hasCheckError = false;
-    for (const p of group) {
-      const data = p.item.data;
-      if (typeof data === 'string' && (data.includes('Please check GPRS !!!') || data.includes('Please check CSQ !!!'))) {
-        hasCheckError = true;
-      }
-    }
-    
-    const buf = [];
-    for (const p of group) {
-      const data = p.item.data;
-      if (typeof data === 'string' && (data.includes('Please check GPRS !!!') || data.includes('Please check CSQ !!!'))) {
-        continue;
-      }
-      for (let i = 0; i < data.length; i++) {
-        buf.push(data.charCodeAt(i) & 0xFF);
-      }
-    }
-    
-    let isPass = false;
-    if (buf.length > 0) {
-      const savedCellIdx = lastMatchedRuleIndices.cell;
-      const res = analyzeBufferedModbus(buf, null, false, 'cell');
-      lastMatchedRuleIndices.cell = savedCellIdx;
-      isPass = res ? res.isPass : false;
-    }
-    
-    return {
-      startTime,
-      endTime,
-      duration,
-      isPass,
-      hasCheckError,
-      timestamp: group[0].item.timestamp
-    };
-  });
+/**
+ * Record a completed CRC analysis cycle directly into the performance event log.
+ * Called at the end of each inactivity timer when analyzeBufferedModbus completes.
+ */
+function recordPerfCycleEvent(consoleType, isPass, hasCrcError, duration, startTime, timestamp) {
+  if (!startTime) return;
+
+  const event = {
+    type: 'cycle',
+    console: consoleType,
+    time: startTime,
+    timestamp: timestamp || getFormattedTime(),
+    duration: duration || 0,
+    isPass: isPass,
+    hasCrcError: hasCrcError
+  };
+
+  // Deduplicate: if an event with same console type within 1000ms exists, replace it
+  const existingIndex = perfEventLog.rawCycleEvents.findIndex(
+    e => e.console === consoleType && e.type === 'cycle' && Math.abs(e.time - event.time) < 1000
+  );
+  if (existingIndex !== -1) {
+    perfEventLog.rawCycleEvents[existingIndex] = event;
+  } else {
+    perfEventLog.rawCycleEvents.push(event);
+  }
+
+  // Cap at 2000 items
+  if (perfEventLog.rawCycleEvents.length > 2000) {
+    perfEventLog.rawCycleEvents = perfEventLog.rawCycleEvents.slice(-2000);
+  }
+
+  // Rebuild matched points and save
+  rebuildMatchedPerfEvents();
+  savePerfEventLog();
+
+  if (panePerf && panePerf.classList.contains('active')) {
+    drawPerformanceChart();
+  }
+}
+
+/**
+ * Record a GPRS/CSQ error event directly into the performance event log.
+ * Called when DTU notification messages are detected in incoming data.
+ */
+function recordPerfErrorEvent(errorKind, time, timestamp) {
+  const event = {
+    type: 'error',
+    console: 'cell',
+    errorKind: errorKind,
+    time: time || Date.now(),
+    timestamp: timestamp || getFormattedTime()
+  };
+
+  // Deduplicate: don't record the same error type within 5 seconds
+  const isDuplicate = perfEventLog.rawCycleEvents.some(
+    e => e.type === 'error' && e.errorKind === errorKind && Math.abs(e.time - event.time) < 5000
+  );
+  if (isDuplicate) return;
+
+  perfEventLog.rawCycleEvents.push(event);
+
+  if (perfEventLog.rawCycleEvents.length > 2000) {
+    perfEventLog.rawCycleEvents = perfEventLog.rawCycleEvents.slice(-2000);
+  }
+
+  rebuildMatchedPerfEvents();
+  savePerfEventLog();
+
+  if (panePerf && panePerf.classList.contains('active')) {
+    drawPerformanceChart();
+  }
+}
+
+/**
+ * Build matched chart points from raw cycle events.
+ * Pairs inet and cell cycles that occur within 15 seconds of each other.
+ * Incorporates GPRS/CSQ error events as cellCheckError flags.
+ */
+function rebuildMatchedPerfEvents() {
+  const rawEvents = perfEventLog.rawCycleEvents || [];
+
+  const inetCycles = rawEvents.filter(e => e.type === 'cycle' && e.console === 'inet').sort((a, b) => a.time - b.time);
+  const cellCycles = rawEvents.filter(e => e.type === 'cycle' && e.console === 'cell').sort((a, b) => a.time - b.time);
+  const errorEvents = rawEvents.filter(e => e.type === 'error').sort((a, b) => a.time - b.time);
 
   const matchedPoints = [];
-  const matchedCellIds = new Set();
-  
-  processedInetCycles.forEach(inetCycle => {
-    let bestCellCycle = null;
+  const matchedCellTimes = new Set();
+  const matchedErrorTimes = new Set();
+
+  inetCycles.forEach(inetCycle => {
+    let bestCell = null;
     let minDiff = 15000;
-    
-    processedCellCycles.forEach(cellCycle => {
-      const diff = Math.abs(inetCycle.startTime - cellCycle.startTime);
+
+    cellCycles.forEach(cellCycle => {
+      if (matchedCellTimes.has(cellCycle.time)) return;
+      const diff = Math.abs(inetCycle.time - cellCycle.time);
       if (diff < minDiff) {
         minDiff = diff;
-        bestCellCycle = cellCycle;
+        bestCell = cellCycle;
       }
     });
-    
-    if (bestCellCycle) {
-      matchedCellIds.add(bestCellCycle.startTime);
+
+    let hasCheckError = false;
+    if (bestCell) {
+      const matchedErr = errorEvents.find(e => Math.abs(e.time - bestCell.time) < 15000);
+      if (matchedErr) {
+        hasCheckError = true;
+        matchedErrorTimes.add(matchedErr.time);
+      }
+    }
+
+    if (bestCell) {
+      matchedCellTimes.add(bestCell.time);
       matchedPoints.push({
         timestamp: inetCycle.timestamp,
-        time: inetCycle.startTime,
+        time: inetCycle.time,
         inetDuration: inetCycle.duration,
-        cellDuration: bestCellCycle.duration,
+        cellDuration: bestCell.duration,
         inetPass: inetCycle.isPass,
-        cellPass: bestCellCycle.hasCheckError ? false : bestCellCycle.isPass,
-        cellCheckError: bestCellCycle.hasCheckError,
-        isPass: inetCycle.isPass && bestCellCycle.isPass && !bestCellCycle.hasCheckError
+        cellPass: hasCheckError ? false : bestCell.isPass,
+        cellCheckError: hasCheckError,
+        isPass: inetCycle.isPass && bestCell.isPass && !hasCheckError
       });
     } else {
       matchedPoints.push({
         timestamp: inetCycle.timestamp,
-        time: inetCycle.startTime,
+        time: inetCycle.time,
         inetDuration: inetCycle.duration,
         cellDuration: null,
         inetPass: inetCycle.isPass,
@@ -5507,39 +5600,75 @@ function reconstructHistoryCycles() {
       });
     }
   });
-  
-  processedCellCycles.forEach(cellCycle => {
-    if (!matchedCellIds.has(cellCycle.startTime)) {
+
+  // Add unmatched cell cycles
+  cellCycles.forEach(cellCycle => {
+    if (!matchedCellTimes.has(cellCycle.time)) {
+      const matchedErr = errorEvents.find(e => Math.abs(e.time - cellCycle.time) < 15000);
+      let hasCheckError = false;
+      if (matchedErr) {
+        hasCheckError = true;
+        matchedErrorTimes.add(matchedErr.time);
+      }
       matchedPoints.push({
         timestamp: cellCycle.timestamp,
-        time: cellCycle.startTime,
+        time: cellCycle.time,
         inetDuration: null,
         cellDuration: cellCycle.duration,
         inetPass: false,
-        cellPass: cellCycle.hasCheckError ? false : cellCycle.isPass,
-        cellCheckError: cellCycle.hasCheckError,
-        isPass: cellCycle.isPass && !cellCycle.hasCheckError
+        cellPass: hasCheckError ? false : cellCycle.isPass,
+        cellCheckError: hasCheckError,
+        isPass: cellCycle.isPass && !hasCheckError
       });
     }
   });
-  
+
+  // Add unmatched error events as standalone data points
+  errorEvents.forEach(e => {
+    if (!matchedErrorTimes.has(e.time)) {
+      matchedPoints.push({
+        timestamp: e.timestamp,
+        time: e.time,
+        inetDuration: null,
+        cellDuration: null,
+        inetPass: false,
+        cellPass: false,
+        cellCheckError: true,
+        isPass: false
+      });
+    }
+  });
+
   matchedPoints.sort((a, b) => a.time - b.time);
-  return matchedPoints;
+
+  // Cap at 1000 matched points
+  if (matchedPoints.length > 1000) {
+    matchedPoints.splice(0, matchedPoints.length - 1000);
+  }
+
+  perfEventLog.events = matchedPoints;
 }
 
-function savePerformanceTrackerToLocalStorage() {
-  localStorage.setItem('perf_matched_points', JSON.stringify(performanceTracker.matchedPoints));
-}
+/**
+ * Simplified scan function. With direct event recording, this function
+ * no longer needs to re-parse console histories. It just rebuilds the
+ * matched chart points and redraws.
+ * @param {boolean} forceFullRescan - If true, clears all recorded events.
+ */
+function scanMqttLogsForPerfEvents(forceFullRescan = false) {
+  if (forceFullRescan) {
+    perfEventLog.rawCycleEvents = [];
+    perfEventLog.events = [];
+    savePerfEventLog();
+  }
 
-function initializePerformanceTrackerFromHistory() {
-  try {
-    performanceTracker.matchedPoints = reconstructHistoryCycles();
-    savePerformanceTrackerToLocalStorage();
-  } catch (e) {
-    console.error('Failed to initialize performance tracker from history:', e);
-    performanceTracker.matchedPoints = [];
+  rebuildMatchedPerfEvents();
+
+  if (panePerf && panePerf.classList.contains('active')) {
+    drawPerformanceChart();
   }
 }
+
 
 // Canvas plotting function
 function drawPerformanceChart() {
@@ -5584,7 +5713,7 @@ function drawPerformanceChart() {
   const chartWidth = width - paddingLeft - paddingRight;
   const chartHeight = height - paddingTop - paddingBottom;
   
-  const pts = performanceTracker.matchedPoints;
+  const pts = perfEventLog.events;
   if (pts.length === 0) {
     ctx.fillStyle = '#657388';
     ctx.font = '14px var(--font-sans), sans-serif';
@@ -5745,7 +5874,7 @@ function drawPerformanceChart() {
       const y = getValY(ms);
       const barHeight = Math.max(2, bottomY - y);
       const barTop = bottomY - barHeight;
-      ctx.fillStyle = '#ea4335'; // Red for check error
+      ctx.fillStyle = '#f59e0b'; // Amber/Orange for GPRS/CSQ check error
       drawRoundedBar(ctx, xCell - singleBarWidth / 2, barTop, singleBarWidth, barHeight, Math.min(4, singleBarWidth / 2));
     } else if (pt.cellDuration !== null && pt.cellDuration !== undefined) {
       const ms = pt.cellDuration;
@@ -5789,9 +5918,14 @@ function drawPerformanceChart() {
       cellText = 'N/A (Logs Deleted/Missing)';
     }
     
+    let statusText = pt.isPass ? 'PASS' : 'FAIL';
+    if (pt.cellCheckError) {
+      statusText = 'FAIL (Check GPRS/CSQ)';
+    }
+    
     const lines = [
       `Time: ${pt.timestamp}`,
-      `Status: ${pt.isPass ? 'PASS' : 'FAIL'}`,
+      `Status: ${statusText}`,
       `🌐 Internet: ${inetText}`,
       `📶 Cellular: ${cellText}`
     ];
@@ -5883,7 +6017,25 @@ loadCellSettings();
 loadCellModbusSettings();
 loadInetConsoleHistory();
 loadCellConsoleHistory();
-initializePerformanceTrackerFromHistory();
+loadPerfEventLog();
+scanMqttLogsForPerfEvents();
+
+// Bind Performance Graph header buttons
+const btnPerfReload = document.getElementById('btn-perf-reload');
+if (btnPerfReload) {
+  btnPerfReload.addEventListener('click', () => {
+    loadPerfEventLog();
+    scanMqttLogsForPerfEvents(false);
+  });
+}
+
+const btnPerfClear = document.getElementById('btn-perf-clear');
+if (btnPerfClear) {
+  btnPerfClear.addEventListener('click', () => {
+    clearPerfEventLog();
+    drawPerformanceChart();
+  });
+}
 updateGeneratedModbusHex();
 updateSidebarCsqCardVisibility();
 initializeMqttPayloadBadgeFromStorage();
@@ -5901,7 +6053,7 @@ if (perfCanvas) {
     const rect = perfCanvas.getBoundingClientRect();
     const xVisual = e.clientX - rect.left;
     const yVisual = e.clientY - rect.top;
-    const pts = performanceTracker.matchedPoints;
+    const pts = perfEventLog.events;
     if (pts.length === 0) return;
     
     const paddingLeft = 75;
@@ -6005,4 +6157,799 @@ window.addEventListener('keydown', (e) => {
     window.location.reload();
   }
 });
+
+
+// ==========================================
+// MCU File System View Logic
+// ==========================================
+
+let mcufsDeleteMode = false;
+let mcufsExpandedLocalPaths = new Set();
+let mcufsExpandedMcuPaths = new Set();
+let mcufsIsMounted = false;
+let mcufsIsConnected = false;
+let mcufsLocalPathVal = "";
+let mcufsActiveFileContent = null;
+let mcufsActiveFilename = null;
+
+// Helper to format bytes
+function mcufsFormatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Build HTML tree structure recursively
+function mcufsBuildTreeHTML(nodes, isLocal, isDeleteMode, parentPath = "") {
+  if (!nodes || nodes.length === 0) {
+    const depth = parentPath ? parentPath.split('/').length : 0;
+    return `<div class="mcufs-tree-empty" style="color: var(--text-muted); font-size: 12.5px; padding-left: ${depth * 16 + 20}px; font-style: italic;">(empty)</div>`;
+  }
+  
+  let html = "";
+  nodes.forEach(node => {
+    const relPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+    const isDir = node.type === 'dir';
+    const isExpanded = isLocal ? mcufsExpandedLocalPaths.has(relPath) : mcufsExpandedMcuPaths.has(relPath);
+    
+    const depth = parentPath ? parentPath.split('/').length : 0;
+    const indentWidth = depth * 16;
+    const indentSpan = `<span class="mcufs-tree-indent" style="width: ${indentWidth}px; display: inline-block;"></span>`;
+    
+    const chevron = isDir ? (isExpanded ? "▼ " : "▶ ") : "";
+    const icon = isDir ? "📁" : "📄";
+    const sizeStr = !isDir ? ` <span class="mcufs-tree-size">(${mcufsFormatBytes(node.size)})</span>` : "";
+    
+    const checkboxHtml = isDeleteMode ? `<input type="checkbox" class="mcufs-tree-checkbox" data-path="${relPath}" data-type="${isLocal ? 'local' : 'mcu'}">` : "";
+    
+    html += `
+      <div class="mcufs-tree-item-wrapper" style="display: flex; flex-direction: column;">
+        <div class="mcufs-tree-node" data-path="${relPath}" data-type="${isLocal ? 'local' : 'mcu'}" data-isdir="${isDir}">
+          ${indentSpan}
+          ${checkboxHtml}
+          <span class="mcufs-tree-chevron" style="width: 14px; display: inline-block; font-size: 9px; color: var(--text-muted); cursor: pointer;">${chevron}</span>
+          <span class="mcufs-tree-icon" style="cursor: pointer;">${icon}</span>
+          <span class="mcufs-tree-label" style="cursor: pointer;">${node.name}${sizeStr}</span>
+        </div>
+    `;
+    
+    if (isDir && isExpanded) {
+      html += `<div class="mcufs-tree-children">
+        ${mcufsBuildTreeHTML(node.children, isLocal, isDeleteMode, relPath)}
+      </div>`;
+    }
+    
+    html += `</div>`;
+  });
+  
+  return html;
+}
+
+// Fetch local tree data
+async function mcufsLoadLocalTree() {
+  try {
+    const res = await fetch(`${BASE_URL}/api/mcufs/list_local`);
+    if (!res.ok) throw new Error("Failed to load local files");
+    const data = await res.json();
+    if (data.status === 'success') {
+      const container = document.getElementById('mcufs-local-tree');
+      if (container) {
+        container.innerHTML = mcufsBuildTreeHTML(data.tree, true, mcufsDeleteMode);
+      }
+    }
+  } catch (err) {
+    console.error("Local tree load error:", err);
+  }
+}
+
+// Fetch MCU tree data
+async function mcufsLoadMcuTree() {
+  const container = document.getElementById('mcufs-mcu-tree');
+  if (!container) return;
+
+  if (mcufsIsMounted) {
+    container.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; font-style: italic;">
+      Virtual Drive Active.<br>MCU files are mirrored in the Local folder.
+    </div>`;
+    return;
+  }
+
+  if (!mcufsIsConnected) {
+    container.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; font-style: italic;">
+      Device Offline or Busy.
+    </div>`;
+    return;
+  }
+
+  try {
+    container.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; font-style: italic;">
+      ⌛ Loading MCU tree...
+    </div>`;
+    const res = await fetch(`${BASE_URL}/api/mcufs/list_mcu`);
+    if (!res.ok) throw new Error("Failed to load MCU files");
+    const data = await res.json();
+    if (data.status === 'success') {
+      container.innerHTML = mcufsBuildTreeHTML(data.tree, false, mcufsDeleteMode);
+    } else {
+      container.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; font-style: italic;">
+        Not connected or device busy.
+      </div>`;
+    }
+  } catch (err) {
+    container.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; font-style: italic;">
+      Error fetching MCU tree.
+    </div>`;
+    console.error("MCU tree load error:", err);
+  }
+}
+
+// Poll device status
+let mcufsPrevConnected = null;
+let mcufsPrevMounted = null;
+
+async function mcufsPollStatus() {
+  try {
+    const res = await fetch(`${BASE_URL}/api/mcufs/status`);
+    if (!res.ok) return;
+    const data = await res.json();
+    
+    mcufsIsConnected = data.connected;
+    mcufsIsMounted = data.mounted;
+    mcufsLocalPathVal = data.local_path;
+    
+    // Update local path input if not focused
+    const pathInput = document.getElementById('mcufs-local-path');
+    if (pathInput && document.activeElement !== pathInput) {
+      pathInput.value = mcufsLocalPathVal;
+    }
+    
+    // Check for state changes to trigger tree refresh
+    if (mcufsIsConnected !== mcufsPrevConnected || mcufsIsMounted !== mcufsPrevMounted) {
+      mcufsPrevConnected = mcufsIsConnected;
+      mcufsPrevMounted = mcufsIsMounted;
+      mcufsLoadLocalTree();
+      mcufsLoadMcuTree();
+    }
+    
+    // Update status indicator elements
+    const statusRing = document.querySelector('.mcufs-status-ring');
+    const statusText = document.querySelector('.mcufs-status-text');
+    const statusLabel = document.querySelector('.mcufs-status-label');
+    const mountBtn = document.getElementById('btn-mcufs-mount');
+    
+    const pushBtn = document.getElementById('btn-mcufs-push');
+    const pullBtn = document.getElementById('btn-mcufs-pull');
+    const formatBtn = document.getElementById('btn-mcufs-format');
+    const selectDelBtn = document.getElementById('btn-mcufs-select-delete');
+    const vdiskBtn = document.getElementById('btn-mcufs-vdisk-reset');
+    const mcuResetBtn = document.getElementById('btn-mcufs-mcu-reset');
+    
+    if (statusRing && statusText && statusLabel) {
+      if (mcufsIsConnected) {
+        statusRing.classList.remove('offline');
+        statusRing.classList.add('online');
+        
+        if (mcufsIsMounted) {
+          statusText.innerText = 'VIRT';
+          statusLabel.innerText = 'Virtual Drive Mounted';
+          
+          if (mountBtn) {
+            mountBtn.innerText = '🔌 Unmount Virtual Drive';
+            mountBtn.className = 'btn btn-primary';
+          }
+          
+          // Disable MCU actions while mounted
+          [pushBtn, pullBtn, formatBtn, selectDelBtn, vdiskBtn, mcuResetBtn].forEach(btn => {
+            if (btn) btn.disabled = true;
+          });
+        } else {
+          // Connected and not mounted
+          if (mountBtn) {
+            mountBtn.innerText = '🔌 Mount Virtual Drive';
+            mountBtn.className = 'btn btn-secondary';
+            mountBtn.disabled = false;
+          }
+          
+          [pushBtn, pullBtn, formatBtn, selectDelBtn, vdiskBtn, mcuResetBtn].forEach(btn => {
+            if (btn) btn.disabled = false;
+          });
+          
+          if (data.capacity) {
+            const { total, used, free } = data.capacity;
+            const pct = total > 0 ? Math.round((used / total) * 100) : 0;
+            statusText.innerText = `${pct}%`;
+            statusLabel.innerText = `Used: ${mcufsFormatBytes(used)} / ${mcufsFormatBytes(total)}`;
+          } else {
+            statusText.innerText = 'OK';
+            statusLabel.innerText = 'Device Connected';
+          }
+        }
+      } else {
+        // Offline
+        statusRing.classList.remove('online');
+        statusRing.classList.add('offline');
+        statusText.innerText = '- -';
+        statusLabel.innerText = 'Device Offline';
+        
+        if (mountBtn) mountBtn.disabled = true;
+        [pushBtn, pullBtn, formatBtn, selectDelBtn, vdiskBtn, mcuResetBtn].forEach(btn => {
+          if (btn) btn.disabled = true;
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Status polling error:", err);
+  }
+}
+
+// Open and display file content in modal
+async function mcufsViewFile(filePath, isMcu) {
+  try {
+    const res = await fetch(`${BASE_URL}/api/mcufs/view_file?path=${encodeURIComponent(filePath)}&is_mcu=${isMcu}`);
+    if (!res.ok) throw new Error("Failed to load file contents");
+    const data = await res.json();
+    
+    if (data.status === 'success') {
+      const modal = document.getElementById('mcufs-viewer-modal');
+      const title = document.getElementById('mcufs-modal-title');
+      const pathText = document.getElementById('mcufs-modal-path-text');
+      const textDiv = document.getElementById('mcufs-modal-text-content');
+      const imgDiv = document.getElementById('mcufs-modal-image-content');
+      const binDiv = document.getElementById('mcufs-modal-binary-content');
+      
+      if (!modal) return;
+      
+      title.innerText = isMcu ? `File Viewer (MCU)` : `File Viewer (Local)`;
+      pathText.innerText = filePath;
+      mcufsActiveFilename = data.filename;
+      mcufsActiveFileContent = data.content;
+      
+      // Hide all panels initially
+      textDiv.style.display = 'none';
+      imgDiv.style.display = 'none';
+      binDiv.style.display = 'none';
+      
+      if (data.is_text) {
+        textDiv.style.display = 'block';
+        document.getElementById('mcufs-modal-code-block').innerText = data.content;
+      } else {
+        // Check file extension for image
+        const ext = filePath.split('.').pop().toLowerCase();
+        if (['png', 'jpg', 'jpeg', 'gif'].includes(ext)) {
+          imgDiv.style.display = 'block';
+          document.getElementById('mcufs-modal-img').src = `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${data.content}`;
+        } else {
+          binDiv.style.display = 'block';
+        }
+      }
+      
+      modal.style.display = 'flex';
+    }
+  } catch (err) {
+    alert(`Error loading file: ${err.message}`);
+  }
+}
+
+// Function to handle tree double-click / folder toggle
+function mcufsSetupTreeEventDelegation(treeId, isLocal) {
+  const treeContainer = document.getElementById(treeId);
+  if (!treeContainer) return;
+  
+  treeContainer.addEventListener('click', (e) => {
+    const node = e.target.closest('.mcufs-tree-node');
+    if (!node) return;
+    
+    const path = node.dataset.path;
+    const isDir = node.dataset.isdir === 'true';
+    
+    if (e.target.classList.contains('mcufs-tree-checkbox')) {
+      return; // Checkbox click is handled naturally
+    }
+    
+    if (isDir) {
+      const expandedSet = isLocal ? mcufsExpandedLocalPaths : mcufsExpandedMcuPaths;
+      if (expandedSet.has(path)) {
+        expandedSet.delete(path);
+      } else {
+        expandedSet.add(path);
+      }
+      if (isLocal) mcufsLoadLocalTree();
+      else mcufsLoadMcuTree();
+    }
+  });
+  
+  treeContainer.addEventListener('dblclick', (e) => {
+    const node = e.target.closest('.mcufs-tree-node');
+    if (!node) return;
+    
+    const path = node.dataset.path;
+    const isDir = node.dataset.isdir === 'true';
+    
+    if (!isDir) {
+      mcufsViewFile(path, !isLocal);
+    }
+  });
+}
+
+// Wire up UI events
+function mcufsInitEvents() {
+  // Navigation trigger: load trees immediately upon selecting tab
+  if (navMcuFs) {
+    navMcuFs.addEventListener('click', () => {
+      mcufsPollStatus();
+      mcufsLoadLocalTree();
+      mcufsLoadMcuTree();
+    });
+  }
+  
+  // Local Path Input Change
+  const localPathInput = document.getElementById('mcufs-local-path');
+  if (localPathInput) {
+    localPathInput.addEventListener('change', async () => {
+      const path = localPathInput.value.trim();
+      if (!path) return;
+      try {
+        const res = await fetch(`${BASE_URL}/api/mcufs/set_path`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path })
+        });
+        if (res.ok) {
+          mcufsLoadLocalTree();
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  }
+  
+  // Folder Browse button
+  const browseBtn = document.getElementById('btn-mcufs-browse');
+  if (browseBtn) {
+    browseBtn.addEventListener('click', async () => {
+      const defaultPath = localPathInput ? localPathInput.value : "";
+      const selected = await window.electronAPI.selectDirectory(defaultPath);
+      if (selected) {
+        if (localPathInput) localPathInput.value = selected;
+        await fetch(`${BASE_URL}/api/mcufs/set_path`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: selected })
+        });
+        mcufsLoadLocalTree();
+      }
+    });
+  }
+  
+  // View Local Folder
+  const viewLocalBtn = document.getElementById('btn-mcufs-view-local');
+  if (viewLocalBtn) {
+    viewLocalBtn.addEventListener('click', async () => {
+      try {
+        await fetch(`${BASE_URL}/api/mcufs/open_folder`, { method: 'POST' });
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  }
+  
+  // Refresh Drives
+  const refreshBtn = document.getElementById('btn-mcufs-refresh');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      mcufsPollStatus();
+      mcufsLoadLocalTree();
+      mcufsLoadMcuTree();
+    });
+  }
+  
+  // Mount Toggle
+  const mountBtn = document.getElementById('btn-mcufs-mount');
+  if (mountBtn) {
+    mountBtn.addEventListener('click', async () => {
+      mountBtn.disabled = true;
+      const url = mcufsIsMounted ? `${BASE_URL}/api/mcufs/unmount` : `${BASE_URL}/api/mcufs/mount`;
+      mountBtn.innerText = mcufsIsMounted ? "🔌 Unmounting..." : "🔌 Mounting...";
+      try {
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`Mount action failed: ${err.detail || 'unknown error'}`);
+        }
+      } catch (err) {
+        alert(`Connection error: ${err.message}`);
+      } finally {
+        mcufsPollStatus();
+      }
+    });
+  }
+  
+  // Push to MCU
+  const pushBtn = document.getElementById('btn-mcufs-push');
+  if (pushBtn) {
+    pushBtn.addEventListener('click', async () => {
+      pushBtn.disabled = true;
+      const originalText = pushBtn.innerText;
+      pushBtn.innerText = "⌛ Pushing...";
+      try {
+        const res = await fetch(`${BASE_URL}/api/mcufs/push`, { method: 'POST' });
+        if (res.ok) {
+          alert("Successfully pushed/mirrored files to MCU.");
+          mcufsLoadMcuTree();
+        } else {
+          const err = await res.json();
+          alert(`Push Failed: ${err.detail}`);
+        }
+      } catch (err) {
+        alert(`Connection error: ${err.message}`);
+      } finally {
+        pushBtn.innerText = originalText;
+        pushBtn.disabled = false;
+        mcufsPollStatus();
+      }
+    });
+  }
+  
+  // Pull from MCU
+  const pullBtn = document.getElementById('btn-mcufs-pull');
+  if (pullBtn) {
+    pullBtn.addEventListener('click', async () => {
+      pullBtn.disabled = true;
+      const originalText = pullBtn.innerText;
+      pullBtn.innerText = "⌛ Pulling...";
+      try {
+        const res = await fetch(`${BASE_URL}/api/mcufs/pull`, { method: 'POST' });
+        if (res.ok) {
+          alert("Successfully pulled files from MCU.");
+          mcufsLoadLocalTree();
+        } else {
+          const err = await res.json();
+          alert(`Pull Failed: ${err.detail}`);
+        }
+      } catch (err) {
+        alert(`Connection error: ${err.message}`);
+      } finally {
+        pullBtn.innerText = originalText;
+        pullBtn.disabled = false;
+        mcufsPollStatus();
+      }
+    });
+  }
+  
+  // Format MCU Flash
+  const formatBtn = document.getElementById('btn-mcufs-format');
+  if (formatBtn) {
+    formatBtn.addEventListener('click', async () => {
+      if (!confirm("Are you sure you want to format the MCU flash? This will permanently delete all files and directories on the MCU.")) {
+        return;
+      }
+      formatBtn.disabled = true;
+      const originalText = formatBtn.innerText;
+      formatBtn.innerText = "⌛ Formatting...";
+      try {
+        const res = await fetch(`${BASE_URL}/api/mcufs/format`, { method: 'POST' });
+        if (res.ok) {
+          alert("MCU Flash formatted thoroughly!");
+          mcufsLoadMcuTree();
+        } else {
+          const err = await res.json();
+          alert(`Format Failed: ${err.detail}`);
+        }
+      } catch (err) {
+        alert(`Connection error: ${err.message}`);
+      } finally {
+        formatBtn.innerText = originalText;
+        formatBtn.disabled = false;
+        mcufsPollStatus();
+      }
+    });
+  }
+  
+  // Select Delete / Cancel delete
+  const selectDelBtn = document.getElementById('btn-mcufs-select-delete');
+  const cancelDelBtn = document.getElementById('btn-mcufs-cancel-delete');
+  
+  if (selectDelBtn && cancelDelBtn) {
+    cancelDelBtn.disabled = true;
+    
+    selectDelBtn.addEventListener('click', async () => {
+      if (!mcufsDeleteMode) {
+        mcufsDeleteMode = true;
+        selectDelBtn.innerText = "🗑️ Delete Selected";
+        selectDelBtn.className = "btn btn-primary";
+        cancelDelBtn.disabled = false;
+        
+        mcufsLoadLocalTree();
+        mcufsLoadMcuTree();
+      } else {
+        const localCheckboxes = document.querySelectorAll('.mcufs-tree-checkbox[data-type="local"]:checked');
+        const mcuCheckboxes = document.querySelectorAll('.mcufs-tree-checkbox[data-type="mcu"]:checked');
+        
+        const localFiles = Array.from(localCheckboxes).map(cb => cb.dataset.path);
+        const mcuFiles = Array.from(mcuCheckboxes).map(cb => cb.dataset.path);
+        
+        if (localFiles.length === 0 && mcuFiles.length === 0) {
+          alert("No files selected for deletion.");
+          return;
+        }
+        
+        if (!confirm(`Are you sure you want to delete ${localFiles.length} local items and ${mcuFiles.length} MCU items?`)) {
+          return;
+        }
+        
+        selectDelBtn.disabled = true;
+        cancelDelBtn.disabled = true;
+        selectDelBtn.innerText = "⌛ Deleting...";
+        
+        try {
+          const res = await fetch(`${BASE_URL}/api/mcufs/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ local_files: localFiles, mcu_files: mcuFiles })
+          });
+          
+          if (res.ok) {
+            alert("Items deleted successfully.");
+          } else {
+            const err = await res.json();
+            alert(`Deletion failed: ${err.detail}`);
+          }
+        } catch (err) {
+          alert(`Connection error: ${err.message}`);
+        } finally {
+          mcufsDeleteMode = false;
+          selectDelBtn.innerText = "Select files to delete";
+          selectDelBtn.className = "btn btn-secondary";
+          selectDelBtn.disabled = false;
+          cancelDelBtn.disabled = true;
+          
+          mcufsLoadLocalTree();
+          mcufsLoadMcuTree();
+          mcufsPollStatus();
+        }
+      }
+    });
+    
+    cancelDelBtn.addEventListener('click', () => {
+      mcufsDeleteMode = false;
+      selectDelBtn.innerText = "Select files to delete";
+      selectDelBtn.className = "btn btn-secondary";
+      cancelDelBtn.disabled = true;
+      
+      mcufsLoadLocalTree();
+      mcufsLoadMcuTree();
+    });
+  }
+  
+  // VDisk Reset
+  const vdiskBtn = document.getElementById('btn-mcufs-vdisk-reset');
+  if (vdiskBtn) {
+    vdiskBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/mcufs/vdisk_reset`, { method: 'POST' });
+        if (res.ok) {
+          alert("Virtual Disk Reset requested. MCU will reboot into BOOTSEL mode.");
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  }
+  
+  // MCU Reset
+  const mcuResetBtn = document.getElementById('btn-mcufs-mcu-reset');
+  if (mcuResetBtn) {
+    mcuResetBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/mcufs/mcu_reset`, { method: 'POST' });
+        if (res.ok) {
+          alert("MCU Reset requested. MicroPython is restarting.");
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  }
+  
+  // Modal Close
+  const modalCloseBtn = document.getElementById('btn-mcufs-modal-close');
+  if (modalCloseBtn) {
+    modalCloseBtn.addEventListener('click', () => {
+      const modal = document.getElementById('mcufs-viewer-modal');
+      if (modal) modal.style.display = 'none';
+      mcufsActiveFileContent = null;
+      mcufsActiveFilename = null;
+    });
+  }
+  
+  // Download button inside Modal
+  const modalDownloadBtn = document.getElementById('btn-mcufs-modal-download');
+  if (modalDownloadBtn) {
+    modalDownloadBtn.addEventListener('click', () => {
+      if (mcufsActiveFileContent && mcufsActiveFilename) {
+        const byteCharacters = atob(mcufsActiveFileContent);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: "application/octet-stream" });
+        const link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
+        link.download = mcufsActiveFilename;
+        link.click();
+      }
+    });
+  }
+}
+
+// Start polling and load trees
+mcufsSetupTreeEventDelegation('mcufs-local-tree', true);
+mcufsSetupTreeEventDelegation('mcufs-mcu-tree', false);
+mcufsInitEvents();
+
+// Periodic poll when window is in view and tab is active
+setInterval(() => {
+  const tab = document.getElementById('view-mcu-fs');
+  if (tab && tab.classList.contains('active')) {
+    mcufsPollStatus();
+  }
+}, 2000);
+
+
+// ==========================================
+// MCU REPL Console Logic
+// ==========================================
+
+let replSocket = null;
+let replIsRunning = false;
+
+// Auto-sync timeout input controls
+const replTimeoutNum = document.getElementById('repl-timeout-num');
+const replTimeoutSlider = document.getElementById('repl-timeout-slider');
+
+if (replTimeoutNum && replTimeoutSlider) {
+  replTimeoutNum.addEventListener('input', () => {
+    let val = parseInt(replTimeoutNum.value);
+    if (isNaN(val) || val < 1) val = 1;
+    if (val > 3600) val = 3600;
+    replTimeoutNum.value = val;
+    replTimeoutSlider.value = Math.min(val, 600);
+  });
+  
+  replTimeoutSlider.addEventListener('input', () => {
+    replTimeoutNum.value = replTimeoutSlider.value;
+  });
+}
+
+// Clear Output handler
+const btnReplClear = document.getElementById('btn-repl-clear');
+const replOutputDisplay = document.getElementById('repl-output-display');
+
+if (btnReplClear && replOutputDisplay) {
+  btnReplClear.addEventListener('click', () => {
+    replOutputDisplay.value = "";
+  });
+}
+
+// Load Local File handler
+const btnReplLoad = document.getElementById('btn-repl-load');
+const replCodeInput = document.getElementById('repl-code-input');
+
+if (btnReplLoad && replCodeInput) {
+  btnReplLoad.addEventListener('click', async () => {
+    const res = await window.electronAPI.readLocalFile();
+    if (res) {
+      if (res.error) {
+        alert(`Failed to load file: ${res.error}`);
+      } else if (res.content !== undefined) {
+        replCodeInput.value = res.content;
+      }
+    }
+  });
+}
+
+// Save Local File handler
+const btnReplSave = document.getElementById('btn-repl-save');
+
+if (btnReplSave && replCodeInput) {
+  btnReplSave.addEventListener('click', async () => {
+    const content = replCodeInput.value;
+    const res = await window.electronAPI.writeLocalFile(content);
+    if (res) {
+      if (res.error) {
+        alert(`Failed to save file: ${res.error}`);
+      } else if (res.path) {
+        // success
+      }
+    }
+  });
+}
+
+// Run / Stop REPL execution
+const btnReplRun = document.getElementById('btn-repl-run');
+
+function stopReplExecution() {
+  if (replSocket) {
+    try { replSocket.close(); } catch(e) {}
+    replSocket = null;
+  }
+  replIsRunning = false;
+  if (btnReplRun) {
+    btnReplRun.innerText = "🚀 Run REPL";
+    btnReplRun.className = "btn btn-primary";
+  }
+  if (replCodeInput) replCodeInput.disabled = false;
+  [btnReplSave, btnReplLoad, btnReplClear].forEach(btn => {
+    if (btn) btn.disabled = false;
+  });
+}
+
+if (btnReplRun && replCodeInput && replOutputDisplay) {
+  btnReplRun.addEventListener('click', () => {
+    if (replIsRunning) {
+      stopReplExecution();
+      replOutputDisplay.value += "\n🛑 REPL Stopped & Process Killed\n";
+      replOutputDisplay.scrollTop = replOutputDisplay.scrollHeight;
+      return;
+    }
+    
+    const code = replCodeInput.value.trim();
+    if (!code) {
+      alert("No code to run.");
+      return;
+    }
+    
+    replIsRunning = true;
+    btnReplRun.innerText = "🛑 Stop REPL";
+    btnReplRun.className = "btn btn-secondary";
+    replCodeInput.disabled = true;
+    [btnReplSave, btnReplLoad, btnReplClear].forEach(btn => {
+      if (btn) btn.disabled = true;
+    });
+    
+    replOutputDisplay.value += ">> Run\n";
+    replOutputDisplay.scrollTop = replOutputDisplay.scrollHeight;
+    
+    const timeout = replTimeoutNum ? parseInt(replTimeoutNum.value) : 30;
+    
+    const wsUrl = `${BASE_URL.replace('http://', 'ws://')}/ws/repl`;
+    replSocket = new WebSocket(wsUrl);
+    
+    replSocket.onopen = () => {
+      replSocket.send(JSON.stringify({
+        action: "run",
+        code: code,
+        timeout: timeout
+      }));
+    };
+    
+    replSocket.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'stdout' || msg.type === 'stderr') {
+        replOutputDisplay.value += msg.data;
+        replOutputDisplay.scrollTop = replOutputDisplay.scrollHeight;
+      } else if (msg.type === 'status' && msg.data === 'done') {
+        stopReplExecution();
+        replOutputDisplay.value += "\n>> Done.\n";
+        replOutputDisplay.scrollTop = replOutputDisplay.scrollHeight;
+      }
+    };
+    
+    replSocket.onerror = (err) => {
+      console.error(err);
+      replOutputDisplay.value += "\n[error] WebSocket connection error.\n";
+      replOutputDisplay.scrollTop = replOutputDisplay.scrollHeight;
+      stopReplExecution();
+    };
+    
+    replSocket.onclose = () => {
+      stopReplExecution();
+    };
+  });
+}
+
+
 

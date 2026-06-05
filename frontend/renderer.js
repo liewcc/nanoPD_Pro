@@ -1982,22 +1982,22 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
           }
         }
 
-        // 1. Search for an unconsumed tag on or inside the current response frame
+        // 1. Search for the closest unconsumed tag before the frame
         let bestTagOffset = -1;
         for (const to of tagOffsets) {
-          if (to >= offset && to < offset + respFrame.length && !consumedTagOffsets.has(to)) {
+          if (to < offset && !consumedTagOffsets.has(to)) {
             bestTagOffset = to;
-            break; // Use the first tag found inside the frame
+          } else if (to >= offset) {
+            break;
           }
         }
 
-        // 2. Fallback to the closest unconsumed tag before the frame
+        // 2. Fallback to an unconsumed tag on or inside the current response frame
         if (bestTagOffset === -1) {
           for (const to of tagOffsets) {
-            if (to < offset && !consumedTagOffsets.has(to)) {
+            if (to >= offset && to < offset + respFrame.length && !consumedTagOffsets.has(to)) {
               bestTagOffset = to;
-            } else if (to >= offset) {
-              break;
+              break; // Use the first tag found inside the frame
             }
           }
         }
@@ -2019,8 +2019,9 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
 
           // If the normalized tag is greater than expectedIndex, it is a lagged tag.
           // Map it back to N-1 (which maps to expectedIndex or intermediate skipped command).
+          // BUGFIX: Prevent Index 20 from being mis-corrected to 19 if it's genuinely the start of 20
           let resolvedIndex = normalizedTag;
-          if (normalizedTag === expectedIndex + 1) {
+          if (normalizedTag === expectedIndex + 1 && expectedIndex !== 19) {
             resolvedIndex = normalizedTag - 1;
           }
 

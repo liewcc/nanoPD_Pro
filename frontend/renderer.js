@@ -76,6 +76,28 @@ function switchView(activeTab, targetPane) {
   activeTab.classList.add('active');
   targetPane.classList.add('active');
   
+  if (targetPane === viewMqtt) {
+    if (paneInternet && paneInternet.classList.contains('active')) {
+      const inetBody = document.getElementById('inet-console-body');
+      if (inetBody) {
+        setTimeout(() => {
+          inetBody.scrollTop = inetBody.scrollHeight;
+        }, 50);
+      }
+    } else if (paneCellular && paneCellular.classList.contains('active')) {
+      const cellBody = document.getElementById('cell-console-body');
+      if (cellBody) {
+        setTimeout(() => {
+          cellBody.scrollTop = cellBody.scrollHeight;
+        }, 50);
+      }
+    } else if (panePerf && panePerf.classList.contains('active')) {
+      setTimeout(() => {
+        drawPerformanceChart();
+      }, 50);
+    }
+  }
+  
   updateSidebarCsqCardVisibility();
 }
 
@@ -1419,8 +1441,24 @@ function switchMqttSubTab(activeBtn, targetPane) {
   activeBtn.classList.add('active');
   targetPane.classList.add('active');
   
-  if (targetPane === panePerf) {
-    drawPerformanceChart();
+  if (targetPane === paneInternet) {
+    const inetBody = document.getElementById('inet-console-body');
+    if (inetBody) {
+      setTimeout(() => {
+        inetBody.scrollTop = inetBody.scrollHeight;
+      }, 50);
+    }
+  } else if (targetPane === paneCellular) {
+    const cellBody = document.getElementById('cell-console-body');
+    if (cellBody) {
+      setTimeout(() => {
+        cellBody.scrollTop = cellBody.scrollHeight;
+      }, 50);
+    }
+  } else if (targetPane === panePerf) {
+    setTimeout(() => {
+      drawPerformanceChart();
+    }, 50);
   }
   
   updateSidebarCsqCardVisibility();
@@ -1658,10 +1696,18 @@ function modbusFrameLength(bytes, offset, hint) {
 function tryParseModbusAt(bytes, offset, hint = 'auto') {
   const hints = hint === 'auto' ? ['response', 'request'] : [hint];
   let crcErrorFound = false;
+  let isPartial = false;
   for (const h of hints) {
     const { len, type, fc } = modbusFrameLength(bytes, offset, h) || {};
+    if (len === -1) {
+      isPartial = true;
+      continue;
+    }
     if (!len || len < 0) continue;
-    if (offset + len > bytes.length) continue;
+    if (offset + len > bytes.length) {
+      isPartial = true;
+      continue;
+    }
     const frame = bytes.slice(offset, offset + len);
     const bodyLen = frame.length - 2;
     const calcCrc = crc16Modbus(frame.slice(0, bodyLen));
@@ -1671,6 +1717,9 @@ function tryParseModbusAt(bytes, offset, hint = 'auto') {
     } else {
       crcErrorFound = true;
     }
+  }
+  if (isPartial) {
+    return { partial: true };
   }
   if (crcErrorFound) {
     return { crcError: true };
@@ -1878,13 +1927,11 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
               if (calcCrc === recCrc) {
                 logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, ruleIndex);
                 advance += respLen;
-                if (consoleType === 'inet' && ruleIndex !== undefined && ruleIndex !== 'secondary') {
+                if (ruleIndex !== undefined && ruleIndex !== 'secondary') {
                   parsedResponseIndexes.add(Number(ruleIndex));
                 }
               } else {
-                if (consoleType === 'inet') {
-                  hasCrcError = true;
-                }
+                hasCrcError = true;
               }
             }
           }
@@ -2052,16 +2099,14 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
       }
 
       logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
-      if (consoleType === 'inet' && chosenRule && chosenRule.index !== undefined && chosenRule.index !== 'secondary') {
+      if (chosenRule && chosenRule.index !== undefined && chosenRule.index !== 'secondary') {
         parsedResponseIndexes.add(Number(chosenRule.index));
       }
       matchCount++;
       offset += parsedResp.len;
       continue;
     } else if (parsedResp && parsedResp.crcError) {
-      if (consoleType === 'inet') {
-        hasCrcError = true;
-      }
+      hasCrcError = true;
     }
 
 
@@ -2087,9 +2132,7 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
       offset += parsedReq.len;
       continue;
     } else if (parsedReq && parsedReq.crcError) {
-      if (consoleType === 'inet') {
-        hasCrcError = true;
-      }
+      hasCrcError = true;
     }
 
     // 4. Slide window forward
@@ -2100,19 +2143,36 @@ function analyzeBufferedModbus(buf, consoleBody, timeTagEnabled, consoleType) {
     addLogToConsole(consoleBody, `[Modbus CRC] No matching Polling command found in ${buf.length} bytes. Please check if Polling Commands List matches the actual transmitted commands.`, 'system', timeTagEnabled);
   }
 
-  if (consoleType === 'inet') {
-    const configuredIndices = new Set(
-      rules
-        .filter(r => r.index !== 'secondary' && r.index !== undefined)
-        .map(r => Number(r.index))
-    );
-    // Only update the badge if this buffer contained primary Modbus responses or encountered CRC errors
-    if (parsedResponseIndexes.size > 0 || hasCrcError) {
-      const isComplete = configuredIndices.size > 0 && Array.from(configuredIndices).every(idx => parsedResponseIndexes.has(idx));
-      const isPass = isComplete && !hasCrcError;
-      updateMqttPayloadBadge(isPass);
+  const configuredIndices = new Set(
+    rules
+      .filter(r => r.index !== 'secondary' && r.index !== undefined)
+      .map(r => Number(r.index))
+  );
+
+  const isComplete = configuredIndices.size > 0 && Array.from(configuredIndices).every(idx => parsedResponseIndexes.has(idx));
+  const isPass = isComplete && !hasCrcError;
+
+  if (configuredIndices.size > 0) {
+    const passedList = [];
+    const failedList = [];
+    const sortedConfigured = Array.from(configuredIndices).sort((a, b) => a - b);
+    for (const idx of sortedConfigured) {
+      if (parsedResponseIndexes.has(idx)) {
+        passedList.push(idx);
+      } else {
+        failedList.push(idx);
+      }
+    }
+    if (consoleType !== 'inet' && failedList.length > 0) {
+      addLogToConsole(consoleBody, `[Modbus CRC Summary] Index 1-20 Results: Passed: [${passedList.join(', ')}], Failed/Missing: [${failedList.join(', ')}]`, 'system', timeTagEnabled);
     }
   }
+
+  return {
+    isPass,
+    hasCrcError,
+    parsedResponseIndexes
+  };
 }
 
 /**
@@ -2133,6 +2193,7 @@ function bytesToHexSpaced(bytes) {
 // Log a simplified Modbus analysis result (CRC Status only)
 // ruleIndex: 1-based index from POLLING COMMANDS LIST, or undefined for secondary COM entries.
 function logModbusAnalysis(consoleBody, frame, frameType, timeTagEnabled, consoleType, ruleIndex) {
+  if (!consoleBody) return;
   const isRequest = (frameType === 'request');
   const baseLabel = isRequest ? '[MODBUS REQUEST]' : '[MODBUS RESPOND]';
   let indexSuffix = '';
@@ -2175,6 +2236,13 @@ function logModbusAnalysis(consoleBody, frame, frameType, timeTagEnabled, consol
   }
 }
 
+let inetCycleStartTime = null;
+let inetCycleEndTime = null;
+let inetCycleStartTimestamp = '';
+let cellCycleStartTime = null;
+let cellCycleEndTime = null;
+let cellCycleStartTimestamp = '';
+
 // ── Cellular Modbus CRC accumulator ──────────────────────────────────────────
 // All bytes received from the DTU port are appended here, block by block.
 // Once Modbus activity stops for longer than the configured CRC Delay,
@@ -2187,8 +2255,14 @@ let cellCrcTimer = null;
  * Appends newBytes to cellCrcAccumulator and resets the inactivity timer.
  * Call this for EVERY chunk of bytes that arrives (RX or TX echo).
  */
-function cellPushToAccumulator(newBytes) {
+function cellPushToAccumulator(newBytes, consoleBody) {
   if (!newBytes || newBytes.length === 0) return;
+
+  if (!cellCrcTimer) {
+    cellCycleStartTime = Date.now();
+    cellCycleStartTimestamp = getFormattedTime();
+  }
+  cellCycleEndTime = Date.now();
 
   // Append to the running buffer
   for (let i = 0; i < newBytes.length; i++) cellCrcAccumulator.push(newBytes[i]);
@@ -2196,19 +2270,22 @@ function cellPushToAccumulator(newBytes) {
     cellCrcAccumulator = cellCrcAccumulator.slice(-16384);
   }
 
-  // (Re-)start the inactivity timer
+  const timeTagEnabled = chkCellTimeTag ? chkCellTimeTag.checked : true;
+
+  // (Re-)start the inactivity timer to clear leftover junk
   if (cellCrcTimer) clearTimeout(cellCrcTimer);
   const delayEl = document.getElementById('crc-check-delay');
   const delaySec = delayEl ? parseFloat(delayEl.value) : 10;
   const delayMs  = (isNaN(delaySec) || delaySec <= 0) ? 10000 : delaySec * 1000;
 
   cellCrcTimer = setTimeout(() => {
-    // Take a snapshot and clear the accumulator before analysis
-    // so new incoming bytes start a fresh session.
-    const snapshot = cellCrcAccumulator.slice();
+    if (cellCrcAccumulator.length > 0) {
+      const snapshot = [...cellCrcAccumulator];
+      analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'cell');
+    }
     cellCrcAccumulator = [];
-    const timeTagEnabled = chkCellTimeTag ? chkCellTimeTag.checked : true;
-    analyzeBufferedModbus(snapshot, cellConsoleBody, timeTagEnabled, 'cell');
+    cellMatchCount = 0;
+    cellCrcTimer = null;
   }, delayMs);
 }
 
@@ -2218,7 +2295,7 @@ function cellPushToAccumulator(newBytes) {
  */
 function cellAnalyzeBuffer(newBytes, consoleBody, crcEnabled, timeTagEnabled) {
   if (!crcEnabled) return;
-  cellPushToAccumulator(newBytes);
+  cellPushToAccumulator(newBytes, consoleBody);
 }
 
 /**
@@ -2239,14 +2316,402 @@ function cellRecordSentFrame(hexStr) {
 // ── Internet MQTT fragment buffer (accumulates hex payload bytes) ─────────────
 let inetCrcAccumulator = [];
 let inetCrcTimer = null;
+let inetReceivedIndices = new Set();
+let cycleHasCrcError = false;
+// Persistent match counters — survive across real-time parseStreamAccumulator calls;
+// reset only when the quiet-period inactivity timer fires at the end of a cycle.
+let inetMatchCount = 0;
+let cellMatchCount = 0;
 
-function inetPushToAccumulator(newBytes) {
+function parseStreamAccumulator(consoleType, consoleBody, timeTagEnabled) {
+  let accumulator = (consoleType === 'inet') ? inetCrcAccumulator : cellCrcAccumulator;
+  const rules = getKnownCommandRules();
+  if (rules.length === 0) return;
+
+  const rulesBySeq = [...rules].sort((a, b) => {
+    const idxA = (a.index !== undefined && a.index !== 'secondary') ? a.index : 9999;
+    const idxB = (b.index !== undefined && b.index !== 'secondary') ? b.index : 9999;
+    return idxA - idxB;
+  });
+
+  // Use the persistent per-console match counter so that tagless-frame sequence
+  // tracking carries across individual real-time invocations within the same cycle.
+  let matchCountRef = (consoleType === 'inet') ? { get: () => inetMatchCount, set: v => { inetMatchCount = v; } }
+                                                : { get: () => cellMatchCount, set: v => { cellMatchCount = v; } };
+  const consumedTagOffsets = new Set();
+
+  let cleaned = [];
+  let tagIndexAtCleanOffset = {};
+  let cleanOffsetToRawOffset = [];
+
+  function rebuildCleaned() {
+    cleaned = [];
+    tagIndexAtCleanOffset = {};
+    cleanOffsetToRawOffset = [];
+    let i = 0;
+    if (consoleType === 'inet') {
+      while (i < accumulator.length) {
+        if (accumulator[i] === 0x3C) { // '<'
+          let j = i + 1;
+          while (j < accumulator.length && accumulator[j] >= 0x30 && accumulator[j] <= 0x39) j++;
+          if (j > i + 1 && j < accumulator.length && accumulator[j] === 0x3E) { // '>'
+            const digits = accumulator.slice(i + 1, j).map(b => String.fromCharCode(b)).join('');
+            const parsedN = parseInt(digits, 10);
+            if (!isNaN(parsedN)) {
+              tagIndexAtCleanOffset[cleaned.length] = parsedN;
+            }
+            i = j + 1;
+            continue;
+          }
+        }
+        cleanOffsetToRawOffset[cleaned.length] = i;
+        cleaned.push(accumulator[i]);
+        i++;
+      }
+      cleanOffsetToRawOffset[cleaned.length] = accumulator.length;
+    } else {
+      cleaned = [...accumulator];
+      for (let k = 0; k <= accumulator.length; k++) {
+        cleanOffsetToRawOffset[k] = k;
+      }
+    }
+  }
+
+  rebuildCleaned();
+
+  let offset = 0;
+  while (offset < cleaned.length) {
+    // 1. Try to match a request rule prefix
+    let matchedRule = null;
+    for (const rule of rules) {
+      const prefix = rule.prefix;
+      if (offset + prefix.length <= cleaned.length) {
+        let hit = true;
+        for (let b = 0; b < prefix.length; b++) {
+          if (cleaned[offset + b] !== prefix[b]) { hit = false; break; }
+        }
+        if (hit) { matchedRule = rule; break; }
+      }
+    }
+
+    if (matchedRule) {
+      const { reqLen, index: ruleIndex, prefix } = matchedRule;
+      if (offset + reqLen > cleaned.length) {
+        // Partial request, wait for more data
+        break;
+      }
+      const reqFrame = cleaned.slice(offset, offset + reqLen);
+      
+      // Look for response immediately following the request
+      const respStart = offset + reqLen;
+      let hasResponse = false;
+      let respLen = 0;
+      let isPartialResp = false;
+      
+      if (respStart + 2 <= cleaned.length) {
+        const rSlaveId = cleaned[respStart];
+        const rFc     = cleaned[respStart + 1];
+        const reqSlaveId = prefix[0];
+        const reqFc     = prefix[1];
+        if (rSlaveId === reqSlaveId && (rFc === reqFc || rFc === (reqFc | 0x80))) {
+          if (rFc & 0x80) {
+            respLen = 5;
+          } else if (rFc >= 0x01 && rFc <= 0x04) {
+            if (respStart + 3 <= cleaned.length) {
+              respLen = 3 + cleaned[respStart + 2] + 2;
+            } else {
+              isPartialResp = true;
+            }
+          } else if (rFc === 0x05 || rFc === 0x06 || rFc === 0x0F || rFc === 0x10) {
+            respLen = 8;
+          }
+          
+          if (!isPartialResp) {
+            if (respStart + respLen <= cleaned.length) {
+              hasResponse = true;
+            } else {
+              isPartialResp = true;
+            }
+          }
+        }
+      }
+      
+      if (isPartialResp) {
+        // Response is partial, wait for more data
+        break;
+      }
+
+      // We have a request, and maybe a complete response.
+      logModbusAnalysis(consoleBody, reqFrame, 'request', timeTagEnabled, consoleType, ruleIndex);
+      let advance = reqLen;
+      
+      if (hasResponse) {
+        const respFrame = cleaned.slice(respStart, respStart + respLen);
+        const bodyLen = respFrame.length - 2;
+        const calcCrc = crc16Modbus(respFrame.slice(0, bodyLen));
+        const recCrc = respFrame[bodyLen] | (respFrame[bodyLen + 1] << 8);
+        const isOk = (calcCrc === recCrc);
+        
+        logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, ruleIndex);
+        
+        if (consoleType === 'inet') {
+          if (ruleIndex !== undefined && ruleIndex !== 'secondary') {
+            inetReceivedIndices.add(Number(ruleIndex));
+          }
+        }
+        advance += respLen;
+      }
+      
+      // Consume parsed bytes
+      const rawEnd = cleanOffsetToRawOffset[offset + advance];
+      accumulator.splice(0, rawEnd);
+      rebuildCleaned();
+      offset = 0;
+      matchCountRef.set(matchCountRef.get() + 1);
+      continue;
+    }
+
+    // 2. Standalone response check
+    const parsedResp = tryParseModbusAt(cleaned, offset, 'response');
+    if (parsedResp) {
+      if (parsedResp.partial) {
+        break;
+      }
+      if (!parsedResp.crcError) {
+        const respFrame = parsedResp.frame;
+        const isErrResp = (respFrame[1] & 0x80) !== 0;
+        const fcTarget = respFrame[1] & 0x7F;
+        const candidateRules = rulesBySeq.filter(r => {
+          const rSlaveId = r.bytes[0];
+          const rFc = r.bytes[1];
+          const expLen = isErrResp ? 5 : getExpectedResponseLength(r.bytes);
+          return rSlaveId === respFrame[0] && rFc === fcTarget && expLen === respFrame.length;
+        });
+        
+        let chosenRule = null;
+        
+        // Priority 1 (Internet MQTT only): use the pre-built tag-offset map.
+        if (consoleType === 'inet' && Object.keys(tagIndexAtCleanOffset).length > 0) {
+          const tagOffsets = Object.keys(tagIndexAtCleanOffset).map(Number).sort((a, b) => a - b);
+          let expectedIndex = 1;
+          if (lastMatchedRuleIndices[consoleType] !== -1) {
+            const lastRule = rulesBySeq[lastMatchedRuleIndices[consoleType]];
+            if (lastRule && lastRule.index !== undefined && lastRule.index !== 'secondary') {
+              expectedIndex = (Number(lastRule.index) % 20) + 1;
+            }
+          }
+
+          let bestTagOffset = -1;
+          for (const to of tagOffsets) {
+            if (to >= offset && to < offset + respFrame.length && !consumedTagOffsets.has(to)) {
+              bestTagOffset = to;
+              break;
+            }
+          }
+          if (bestTagOffset === -1) {
+            for (const to of tagOffsets) {
+              if (to < offset && !consumedTagOffsets.has(to)) {
+                bestTagOffset = to;
+              } else if (to >= offset) {
+                break;
+              }
+            }
+          }
+
+          if (bestTagOffset >= 0) {
+            for (const to of tagOffsets) {
+              if (to <= bestTagOffset) {
+                consumedTagOffsets.add(to);
+              }
+            }
+            const tagN = tagIndexAtCleanOffset[bestTagOffset];
+            let normalizedTag = tagN;
+            if (expectedIndex > 15 && tagN < 5) {
+              normalizedTag = tagN + 20;
+            }
+
+            let resolvedIndex = normalizedTag;
+            if (normalizedTag === expectedIndex + 1) {
+              resolvedIndex = normalizedTag - 1;
+            }
+            if (resolvedIndex > 20) {
+              resolvedIndex -= 20;
+            }
+
+            chosenRule = candidateRules.find(r => r.index !== undefined && r.index !== 'secondary' && Number(r.index) === resolvedIndex) || null;
+            if (chosenRule) {
+              const seqIdx = rulesBySeq.indexOf(chosenRule);
+              if (seqIdx !== -1) lastMatchedRuleIndices[consoleType] = seqIdx;
+            }
+          }
+        }
+
+        // Priority 2: scan bytes immediately before offset for inline prefix
+        if (!chosenRule) {
+          let parsedIndex = null;
+          if (offset >= 3) {
+            if (cleaned[offset - 1] === 0x3E) { // '>'
+              let idxStart = offset - 2;
+              while (idxStart >= 0 && cleaned[idxStart] >= 0x30 && cleaned[idxStart] <= 0x39) idxStart--;
+              if (idxStart >= 0 && cleaned[idxStart] === 0x3C) {
+                const digits = cleaned.slice(idxStart + 1, offset - 1).map(b => String.fromCharCode(b)).join('');
+                const val = parseInt(digits, 10);
+                if (!isNaN(val)) parsedIndex = val;
+              }
+            }
+            if (parsedIndex === null && cleaned[offset - 1] === 0x5D) { // ']'
+              let idxStart = offset - 2;
+              while (idxStart >= 0 && cleaned[idxStart] >= 0x30 && cleaned[idxStart] <= 0x39) idxStart--;
+              if (idxStart >= 0 && cleaned[idxStart] === 0x5B) {
+                const digits = cleaned.slice(idxStart + 1, offset - 1).map(b => String.fromCharCode(b)).join('');
+                const val = parseInt(digits, 10);
+                if (!isNaN(val)) parsedIndex = val;
+              }
+            }
+            if (parsedIndex === null && cleaned[offset - 1] === 0x3A) { // ':'
+              let idxStart = offset - 2;
+              while (idxStart >= 0 && cleaned[idxStart] >= 0x30 && cleaned[idxStart] <= 0x39) idxStart--;
+              if (idxStart < offset - 2) {
+                const digits = cleaned.slice(idxStart + 1, offset - 1).map(b => String.fromCharCode(b)).join('');
+                const val = parseInt(digits, 10);
+                if (!isNaN(val)) parsedIndex = val;
+              }
+            }
+          }
+          if (parsedIndex !== null) {
+            chosenRule = candidateRules.find(r => r.index !== undefined && r.index.toString() === parsedIndex.toString()) || null;
+            if (chosenRule) {
+              const seqIdx = rulesBySeq.indexOf(chosenRule);
+              if (seqIdx !== -1) lastMatchedRuleIndices[consoleType] = seqIdx;
+            }
+          }
+        }
+
+        // Priority 3: no tag available
+        if (!chosenRule && candidateRules.length > 0) {
+          const allSameLength = candidateRules.every(r =>
+            getExpectedResponseLength(r.bytes) === getExpectedResponseLength(candidateRules[0].bytes)
+          );
+          if (allSameLength) {
+            const posInCandidates = matchCountRef.get() % candidateRules.length;
+            chosenRule = candidateRules[posInCandidates] || candidateRules[0];
+            const seqIdx = rulesBySeq.indexOf(chosenRule);
+            if (seqIdx !== -1) lastMatchedRuleIndices[consoleType] = seqIdx;
+          } else {
+            const candidatesWithSeqIdx = candidateRules.map(r => ({ rule: r, seqIdx: rulesBySeq.indexOf(r) }));
+            candidatesWithSeqIdx.sort((a, b) => a.seqIdx - b.seqIdx);
+            const lastIdx = lastMatchedRuleIndices[consoleType];
+            const nextCandidate = candidatesWithSeqIdx.find(c => c.seqIdx > lastIdx) || candidatesWithSeqIdx[0];
+            chosenRule = nextCandidate.rule;
+            lastMatchedRuleIndices[consoleType] = nextCandidate.seqIdx;
+          }
+        }
+
+        logModbusAnalysis(consoleBody, respFrame, 'response', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
+        
+        if (consoleType === 'inet') {
+          if (chosenRule && chosenRule.index !== undefined && chosenRule.index !== 'secondary') {
+            inetReceivedIndices.add(Number(chosenRule.index));
+          }
+        }
+        
+        const rawEnd = cleanOffsetToRawOffset[offset + parsedResp.len];
+        accumulator.splice(0, rawEnd);
+        rebuildCleaned();
+        offset = 0;
+        matchCountRef.set(matchCountRef.get() + 1);
+        continue;
+      } else {
+        // CRC Error on response - dynamically estimate length to consume
+        const fc = cleaned[offset + 1];
+        let errorLen = 5;
+        if ((fc & 0x80) === 0 && (fc === 0x05 || fc === 0x06 || fc === 0x0F || fc === 0x10)) {
+          errorLen = 8;
+        } else if ((fc & 0x80) === 0 && fc >= 0x01 && fc <= 0x04) {
+          if (offset + 3 <= cleaned.length) {
+            errorLen = 3 + cleaned[offset + 2] + 2;
+          }
+        }
+        
+        const errorFrame = cleaned.slice(offset, offset + errorLen);
+        logModbusAnalysis(consoleBody, errorFrame, 'response', timeTagEnabled, consoleType, undefined);
+        if (consoleType === 'inet') {
+          cycleHasCrcError = true;
+        }
+        const rawEnd = cleanOffsetToRawOffset[offset + errorLen];
+        accumulator.splice(0, rawEnd);
+        rebuildCleaned();
+        offset = 0;
+        continue;
+      }
+    }
+
+    // 3. Standalone request check
+    const parsedReq = tryParseModbusAt(cleaned, offset, 'request');
+    if (parsedReq) {
+      if (parsedReq.partial) {
+        break;
+      }
+      if (!parsedReq.crcError) {
+        const reqFrame = parsedReq.frame;
+        const candidateRules = rulesBySeq.filter(r => {
+          return r.bytes.length === reqFrame.length && r.bytes.every((b, i) => b === reqFrame[i]);
+        });
+        let chosenRule = null;
+        if (candidateRules.length > 0) {
+          chosenRule = candidateRules[0];
+        }
+        logModbusAnalysis(consoleBody, reqFrame, 'request', timeTagEnabled, consoleType, chosenRule ? chosenRule.index : undefined);
+        
+        const rawEnd = cleanOffsetToRawOffset[offset + parsedReq.len];
+        accumulator.splice(0, rawEnd);
+        rebuildCleaned();
+        offset = 0;
+        matchCountRef.set(matchCountRef.get() + 1);
+        continue;
+      } else {
+        const errorFrame = cleaned.slice(offset, offset + 8);
+        logModbusAnalysis(consoleBody, errorFrame, 'request', timeTagEnabled, consoleType, undefined);
+        const rawEnd = cleanOffsetToRawOffset[offset + 8];
+        accumulator.splice(0, rawEnd);
+        rebuildCleaned();
+        offset = 0;
+        continue;
+      }
+    }
+
+    // No match at offset, slide forward
+    offset++;
+    if (offset > 50) {
+      const rawDiscard = cleanOffsetToRawOffset[1] || 1;
+      accumulator.splice(0, rawDiscard);
+      rebuildCleaned();
+      offset = 0;
+    }
+  }
+
+  if (consoleType === 'inet') {
+    inetCrcAccumulator = accumulator;
+  } else {
+    cellCrcAccumulator = accumulator;
+  }
+}
+
+function inetPushToAccumulator(newBytes, consoleBody) {
   if (!newBytes || newBytes.length === 0) return;
+
+  if (!inetCrcTimer) {
+    inetCycleStartTime = Date.now();
+    inetCycleStartTimestamp = getFormattedTime();
+  }
+  inetCycleEndTime = Date.now();
 
   for (let i = 0; i < newBytes.length; i++) inetCrcAccumulator.push(newBytes[i]);
   if (inetCrcAccumulator.length > 16384) {
     inetCrcAccumulator = inetCrcAccumulator.slice(-16384);
   }
+
+  const timeTagEnabled = chkInetTimeTag ? chkInetTimeTag.checked : true;
 
   if (inetCrcTimer) clearTimeout(inetCrcTimer);
   const delayEl = document.getElementById('crc-check-delay');
@@ -2254,10 +2719,63 @@ function inetPushToAccumulator(newBytes) {
   const delayMs  = (isNaN(delaySec) || delaySec <= 0) ? 10000 : delaySec * 1000;
 
   inetCrcTimer = setTimeout(() => {
-    const snapshot = inetCrcAccumulator.slice();
+    let hasData = false;
+    let isPass = false;
+    let hasCrcError = false;
+    let parsedResponseIndexes = new Set();
+
+    if (inetCrcAccumulator.length > 0) {
+      hasData = true;
+      const snapshot = [...inetCrcAccumulator];
+      const result = analyzeBufferedModbus(snapshot, consoleBody, timeTagEnabled, 'inet');
+      if (result) {
+        isPass = result.isPass;
+        hasCrcError = result.hasCrcError;
+        parsedResponseIndexes = result.parsedResponseIndexes;
+      }
+    }
+
+    const rules = getKnownCommandRules();
+    const configuredIndices = new Set(
+      rules
+        .filter(r => r.index !== 'secondary' && r.index !== undefined)
+        .map(r => Number(r.index))
+    );
+
+    if (hasData) {
+      updateMqttPayloadBadge(isPass);
+
+      const inetDuration = inetCycleEndTime - inetCycleStartTime;
+      let cellDuration = null;
+      let matchedCellTimestamp = '';
+      if (cellCycleStartTime && Math.abs(inetCycleStartTime - cellCycleStartTime) < 15000) {
+        cellDuration = cellCycleEndTime - cellCycleStartTime;
+        matchedCellTimestamp = cellCycleStartTimestamp;
+      }
+
+      performanceTracker.matchedPoints.push({
+        timestamp: inetCycleStartTimestamp,
+        isPass: isPass,
+        inetDuration: inetDuration,
+        cellDuration: cellDuration,
+        cellTimestamp: matchedCellTimestamp,
+        inetTime: inetCycleStartTime,
+        cellTime: cellCycleStartTime
+      });
+
+      if (performanceTracker.matchedPoints.length > 200) {
+        performanceTracker.matchedPoints.shift();
+      }
+      savePerformanceTrackerToLocalStorage();
+      if (panePerf && panePerf.classList.contains('active')) {
+        drawPerformanceChart();
+      }
+    }
+    inetReceivedIndices.clear();
+    cycleHasCrcError = false;
     inetCrcAccumulator = [];
-    const timeTagEnabled = chkInetTimeTag ? chkInetTimeTag.checked : true;
-    analyzeBufferedModbus(snapshot, inetConsoleBody, timeTagEnabled, 'inet');
+    inetMatchCount = 0;
+    inetCrcTimer = null;
   }, delayMs);
 }
 
@@ -2288,10 +2806,11 @@ function inetAnalyzePayload(rawPayload, consoleBody, crcEnabled, timeTagEnabled,
     }
   }
 
-  inetPushToAccumulator(newBytes);
+  inetPushToAccumulator(newBytes, consoleBody);
 }
 
 function addLogToConsole(consoleBody, text, type = 'system', timeTagEnabled = true) {
+  if (!consoleBody) return null;
   const timePrefix = timeTagEnabled ? getFormattedTime() + ' ' : '';
   const line = document.createElement('div');
   line.className = 'console-line';
@@ -2313,15 +2832,22 @@ function addLogToConsole(consoleBody, text, type = 'system', timeTagEnabled = tr
   const historyItem = {
     type: type,
     text: text,
-    timestamp: timeTagEnabled ? getFormattedTime() : ''
+    timestamp: timeTagEnabled ? getFormattedTime() : '',
+    time: Date.now()
   };
 
   if (consoleBody === inetConsoleBody) {
     inetConsoleHistory.push(historyItem);
     saveInetConsoleHistory();
+    if (chkInetAutoscroll && chkInetAutoscroll.checked) {
+      setTimeout(() => { consoleBody.scrollTop = consoleBody.scrollHeight; }, 10);
+    }
   } else if (consoleBody === cellConsoleBody) {
     cellConsoleHistory.push(historyItem);
     saveCellConsoleHistory();
+    if (chkCellAutoscroll && chkCellAutoscroll.checked) {
+      setTimeout(() => { consoleBody.scrollTop = consoleBody.scrollHeight; }, 10);
+    }
   }
   
   return line;
@@ -2441,7 +2967,7 @@ function connectInetBroker() {
           const displayPayload = isNotify ? msg.payload : formatMqttPayload(msg.payload, hexMode);
           
           // Store raw for live re-rendering
-          inetConsoleHistory.push({ type: 'recv', topic: msg.topic, rawPayload: msg.payload, timestamp: getFormattedTime() });
+          inetConsoleHistory.push({ type: 'recv', topic: msg.topic, rawPayload: msg.payload, timestamp: getFormattedTime(), time: Date.now() });
           if (inetConsoleHistory.length > 500) inetConsoleHistory.shift();
           saveInetConsoleHistory();
           
@@ -2453,19 +2979,14 @@ function connectInetBroker() {
           line.dataset.topic = msg.topic;
           inetConsoleBody.appendChild(line);
           
-          if (crcEnabled) {
-            inetAnalyzePayload(msg.payload, inetConsoleBody, crcEnabled, chkInetTimeTag && chkInetTimeTag.checked, true);
-          }
+          // Always analyze payload in background for performance latency tracking
+          inetAnalyzePayload(msg.payload, chkInetModbusCrc && chkInetModbusCrc.checked ? inetConsoleBody : null, true, chkInetTimeTag && chkInetTimeTag.checked, true);
           
           if (inetConsoleBody.children.length > 500) {
             inetConsoleBody.removeChild(inetConsoleBody.firstChild);
           }
-          
-          // Performance latency tracking
-          performanceTracker.registerInternetMsg(msg.payload);
-          
           if (chkInetAutoscroll && chkInetAutoscroll.checked) {
-            inetConsoleBody.scrollTop = inetConsoleBody.scrollHeight;
+            setTimeout(() => { inetConsoleBody.scrollTop = inetConsoleBody.scrollHeight; }, 10);
           }
         } else if (msg.type === 'log') {
           addLogToConsole(inetConsoleBody, `[Broker Log] ${msg.message}`, 'system', chkInetTimeTag.checked);
@@ -2502,6 +3023,73 @@ function closeInetSocketUI() {
   updateDebugConnectAllButton();
 }
 
+let lastMqttPayloadCalcTime = null;
+let mqttPayloadElapsedTimer = null;
+
+function startMqttPayloadElapsedTimer() {
+  if (mqttPayloadElapsedTimer) clearInterval(mqttPayloadElapsedTimer);
+  const elapsedSpan = document.getElementById('mqtt-payload-elapsed');
+  if (!elapsedSpan || !lastMqttPayloadCalcTime) return;
+
+  const updateElapsed = () => {
+    if (!lastMqttPayloadCalcTime) return;
+    const diff = (Date.now() - lastMqttPayloadCalcTime) / 1000;
+    const m = Math.floor(diff / 60);
+    const s = Math.floor(diff % 60);
+    const ss = s < 10 ? '0' + s : s;
+    elapsedSpan.textContent = ` [${m}:${ss}]`;
+  };
+
+  updateElapsed();
+  mqttPayloadElapsedTimer = setInterval(updateElapsed, 1000);
+}
+
+function clearMqttPayloadBadge() {
+  const container = document.getElementById('mqtt-payload-status-container');
+  if (container) container.style.display = 'none';
+  if (mqttPayloadElapsedTimer) {
+    clearInterval(mqttPayloadElapsedTimer);
+    mqttPayloadElapsedTimer = null;
+  }
+  const elapsedSpan = document.getElementById('mqtt-payload-elapsed');
+  if (elapsedSpan) elapsedSpan.textContent = '';
+  lastMqttPayloadCalcTime = null;
+  
+  localStorage.removeItem('mqtt_payload_status');
+  localStorage.removeItem('mqtt_payload_timestamp');
+  localStorage.removeItem('mqtt_payload_calc_time');
+}
+
+function initializeMqttPayloadBadgeFromStorage() {
+  const status = localStorage.getItem('mqtt_payload_status');
+  const timestamp = localStorage.getItem('mqtt_payload_timestamp');
+  const calcTimeStr = localStorage.getItem('mqtt_payload_calc_time');
+
+  if (!status || !timestamp || !calcTimeStr) return;
+
+  const container = document.getElementById('mqtt-payload-status-container');
+  const badge = document.getElementById('mqtt-payload-badge');
+  const timeSpan = document.getElementById('mqtt-payload-time');
+
+  if (!container || !badge || !timeSpan) return;
+
+  container.style.display = 'flex';
+  timeSpan.textContent = timestamp;
+
+  if (status === 'pass') {
+    badge.textContent = 'payload pass';
+    badge.className = 'mqtt-payload-badge pass';
+  } else {
+    badge.textContent = 'payload fail';
+    badge.className = 'mqtt-payload-badge fail';
+  }
+
+  lastMqttPayloadCalcTime = parseInt(calcTimeStr);
+  if (!isNaN(lastMqttPayloadCalcTime)) {
+    startMqttPayloadElapsedTimer();
+  }
+}
+
 function updateMqttPayloadBadge(isPass) {
   const container = document.getElementById('mqtt-payload-status-container');
   const badge = document.getElementById('mqtt-payload-badge');
@@ -2519,6 +3107,14 @@ function updateMqttPayloadBadge(isPass) {
     badge.textContent = 'payload fail';
     badge.className = 'mqtt-payload-badge fail';
   }
+
+  // Persist status and timestamp
+  lastMqttPayloadCalcTime = Date.now();
+  localStorage.setItem('mqtt_payload_status', isPass ? 'pass' : 'fail');
+  localStorage.setItem('mqtt_payload_timestamp', now);
+  localStorage.setItem('mqtt_payload_calc_time', lastMqttPayloadCalcTime.toString());
+
+  startMqttPayloadElapsedTimer();
 }
 
 if (btnInetConnect) btnInetConnect.addEventListener('click', connectInetBroker);
@@ -2554,13 +3150,11 @@ if (btnInetPub) {
       line.textContent = `${timePrefix}>> [${topic}] ${payload}`;
       inetConsoleBody.appendChild(line);
 
-      inetConsoleHistory.push({ type: 'send', topic: topic, payload: payload, timestamp: getFormattedTime() });
+      inetConsoleHistory.push({ type: 'send', topic: topic, payload: payload, timestamp: getFormattedTime(), time: Date.now() });
       saveInetConsoleHistory();
 
-      const crcEnabled = chkInetModbusCrc ? chkInetModbusCrc.checked : false;
-      if (crcEnabled) {
-        inetAnalyzePayload(payload, inetConsoleBody, crcEnabled, chkInetTimeTag && chkInetTimeTag.checked);
-      }
+      // Always analyze payload in background for performance latency tracking
+      inetAnalyzePayload(payload, chkInetModbusCrc && chkInetModbusCrc.checked ? inetConsoleBody : null, true, chkInetTimeTag && chkInetTimeTag.checked);
 
       if (inetConsoleBody.children.length > 500) inetConsoleBody.removeChild(inetConsoleBody.firstChild);
       if (chkInetAutoscroll && chkInetAutoscroll.checked) {
@@ -2575,8 +3169,21 @@ if (btnClearInetConsole) {
     inetConsoleBody.innerHTML = '';
     inetConsoleHistory = [];
     localStorage.removeItem('inet_console_history');
-    const container = document.getElementById('mqtt-payload-status-container');
-    if (container) container.style.display = 'none';
+    
+    // Set inetDuration = null for all matchedPoints
+    performanceTracker.matchedPoints.forEach(pt => {
+      pt.inetDuration = null;
+    });
+    // Filter out points where both durations are null
+    performanceTracker.matchedPoints = performanceTracker.matchedPoints.filter(pt => pt.inetDuration !== null || pt.cellDuration !== null);
+    
+    savePerformanceTrackerToLocalStorage();
+    
+    clearMqttPayloadBadge();
+
+    if (panePerf && panePerf.classList.contains('active')) {
+      drawPerformanceChart();
+    }
   });
 }
 
@@ -2629,8 +3236,7 @@ if (btnDebugClearAll) {
     inetConsoleBody.innerHTML = '';
     inetConsoleHistory = [];
     localStorage.removeItem('inet_console_history');
-    const container = document.getElementById('mqtt-payload-status-container');
-    if (container) container.style.display = 'none';
+    clearMqttPayloadBadge();
 
     // Clear Cellular MQTT Console
     cellConsoleBody.innerHTML = '';
@@ -2805,6 +3411,7 @@ const cellDataBitsSelect = document.getElementById('cell-data-bits-select');
 const cellStopBitsSelect = document.getElementById('cell-stop-bits-select');
 const cellParitySelect = document.getElementById('cell-parity-select');
 const btnCellConnect = document.getElementById('btn-cell-connect');
+const chkCellConnectReload = document.getElementById('chk-cell-connect-reload');
 const btnCellRefreshCsq = document.getElementById('btn-cell-refresh-csq');
 const btnCellReload = document.getElementById('btn-cell-reload');
 const btnCellReboot = document.getElementById('btn-cell-reboot');
@@ -2939,6 +3546,7 @@ function loadCellSettings() {
     if (chkCellAutoscroll && settings.autoscroll !== undefined) chkCellAutoscroll.checked = settings.autoscroll;
     if (chkCellHexMode && settings.hexMode !== undefined) chkCellHexMode.checked = settings.hexMode;
     if (chkCellModbusCrc && settings.modbusCrc !== undefined) chkCellModbusCrc.checked = settings.modbusCrc;
+    if (chkCellConnectReload && settings.connectReload !== undefined) chkCellConnectReload.checked = settings.connectReload;
     
     const autoCsqEnInput = document.getElementById('cell-auto-csq-en');
     const autoCsqIntervalInput = document.getElementById('cell-auto-csq-interval');
@@ -3017,6 +3625,7 @@ function saveCellSettings() {
     autoscroll: chkCellAutoscroll ? chkCellAutoscroll.checked : true,
     hexMode: chkCellHexMode ? chkCellHexMode.checked : false,
     modbusCrc: chkCellModbusCrc ? chkCellModbusCrc.checked : false,
+    connectReload: chkCellConnectReload ? chkCellConnectReload.checked : true,
     autoCsqEn: document.getElementById('cell-auto-csq-en') ? document.getElementById('cell-auto-csq-en').checked : false,
     autoCsqInterval: document.getElementById('cell-auto-csq-interval') ? parseInt(document.getElementById('cell-auto-csq-interval').value) : 10
   };
@@ -3352,9 +3961,12 @@ function connectCellularDTU() {
       toggleCellControlButtons(true);
       addLogToConsole(cellConsoleBody, `[System] DTU Serial Port connected successfully. Ready.`, 'system', chkCellTimeTag.checked);
       
-      // Auto read all HW settings upon connection
-      if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
-        cellSocket.send(JSON.stringify({ action: 'provision' }));
+      // Auto read all HW settings upon connection if auto-reload switch is enabled
+      const shouldReload = chkCellConnectReload ? chkCellConnectReload.checked : true;
+      if (shouldReload) {
+        if (cellSocket && cellSocket.readyState === WebSocket.OPEN) {
+          cellSocket.send(JSON.stringify({ action: 'provision' }));
+        }
       }
       
       if (typeof markPortOccupationLocally === 'function') {
@@ -3363,8 +3975,9 @@ function connectCellularDTU() {
 
       const autoCsqEn = document.getElementById('cell-auto-csq-en');
       if (autoCsqEn && autoCsqEn.checked) {
-        // Start polling but defer the first query since the provision process already queries CSQ
-        startCellAutoCsqPolling(true);
+        // Start polling. If we reload on connect, defer the first query since the provision process already queries CSQ.
+        // Otherwise, run the first query immediately.
+        startCellAutoCsqPolling(shouldReload);
       }
 
       // Reset traffic state and timers on connect
@@ -3385,6 +3998,7 @@ function connectCellularDTU() {
         const crcEnabled = chkCellModbusCrc ? chkCellModbusCrc.checked : false;
         
         if (msg.type === 'data') {
+
           // Postpone Auto CSQ query whenever any data is received
           postponeCellAutoCsqPolling();
           let displayData = msg.data;
@@ -3407,7 +4021,7 @@ function connectCellularDTU() {
           line.dataset.rawData = msg.data;
           cellConsoleBody.appendChild(line);
           
-          cellConsoleHistory.push({ type: 'recv', data: msg.data, timestamp: getFormattedTime() });
+          cellConsoleHistory.push({ type: 'recv', data: msg.data, timestamp: getFormattedTime(), time: Date.now() });
           saveCellConsoleHistory();
           
           if (cellConsoleBody.children.length > 500) cellConsoleBody.removeChild(cellConsoleBody.firstChild);
@@ -3417,24 +4031,21 @@ function connectCellularDTU() {
             bytes.push(msg.data.charCodeAt(i) & 0xFF);
           }
           detectFallbackTraffic(bytes);
-          const modbusPackets = findModbusPackets(bytes);
-          modbusPackets.forEach(pkt => {
-            performanceTracker.registerCellularMsg(pkt);
-          });
+
           
           // Postpone Auto CSQ query if Modbus activity is detected on RX
           if (hasModbusActivity(bytes)) {
             postponeCellAutoCsqPolling();
           }
           
-          if (crcEnabled) {
-            cellAnalyzeBuffer(bytes, cellConsoleBody, crcEnabled, chkCellTimeTag && chkCellTimeTag.checked);
-          }
+          // Always analyze buffer in background for performance latency tracking
+          cellAnalyzeBuffer(bytes, chkCellModbusCrc && chkCellModbusCrc.checked ? cellConsoleBody : null, true, chkCellTimeTag && chkCellTimeTag.checked);
           
           if (chkCellAutoscroll && chkCellAutoscroll.checked) {
-            cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+            setTimeout(() => { cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight; }, 10);
           }
         } else if (msg.type === 'log') {
+
           let logType = 'system';
           let prefix = '';
           if (msg.direction === 'TX') { logType = 'send'; prefix = '>> '; }
@@ -3442,7 +4053,7 @@ function connectCellularDTU() {
           
           addLogToConsole(cellConsoleBody, `${prefix}${msg.message}`, logType, chkCellTimeTag.checked);
           if (chkCellAutoscroll && chkCellAutoscroll.checked) {
-            cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight;
+            setTimeout(() => { cellConsoleBody.scrollTop = cellConsoleBody.scrollHeight; }, 10);
           }
           
           if (msg.message && msg.message.includes('Reboot')) {
@@ -4421,7 +5032,7 @@ if (btnCellPubModbus) {
         if (txBytes.length > 0 && hasModbusActivity(txBytes)) {
           postponeCellAutoCsqPolling();
         }
-        cellConsoleHistory.push({ type: 'send', data: `>> ${hexStr}`, timestamp: getFormattedTime() });
+        cellConsoleHistory.push({ type: 'send', data: `>> ${hexStr}`, timestamp: getFormattedTime(), time: Date.now() });
         saveCellConsoleHistory();
         
         if (cellConsoleBody.children.length > 500) cellConsoleBody.removeChild(cellConsoleBody.firstChild);
@@ -4514,6 +5125,19 @@ if (btnClearCellConsole) {
     cellConsoleBody.innerHTML = '';
     cellConsoleHistory = [];
     localStorage.removeItem('cell_console_history');
+    
+    // Set cellDuration = null for all matchedPoints
+    performanceTracker.matchedPoints.forEach(pt => {
+      pt.cellDuration = null;
+    });
+    // Filter out points where both durations are null
+    performanceTracker.matchedPoints = performanceTracker.matchedPoints.filter(pt => pt.inetDuration !== null || pt.cellDuration !== null);
+    
+    savePerformanceTrackerToLocalStorage();
+    
+    if (panePerf && panePerf.classList.contains('active')) {
+      drawPerformanceChart();
+    }
   });
 }
 
@@ -4604,6 +5228,11 @@ if (chkCellTimeTag) {
 }
 if (chkCellAutoscroll) {
   chkCellAutoscroll.addEventListener('change', () => {
+    saveCellSettings();
+  });
+}
+if (chkCellConnectReload) {
+  chkCellConnectReload.addEventListener('change', () => {
     saveCellSettings();
   });
 }
@@ -4698,147 +5327,260 @@ for (let i = 0; i < 4; i++) {
 // ==========================================
 class PerformanceTracker {
   constructor() {
-    this.cellularMsgs = []; // list of { hex, time }
-    this.matchedPoints = []; // list of { timestamp, delay, legend }
-    this.metrics = {
-      success: 0,
-      corrupted: 0,
-      pending: 0,
-      avgLatency: 0
-    };
+    this.matchedPoints = []; // list of { timestamp, isPass, inetDuration, cellDuration, cellTimestamp, inetTime, cellTime }
   }
   
-  registerCellularMsg(pktBytes) {
-    let hexStr = '';
-    pktBytes.forEach(b => {
-      let s = b.toString(16).toUpperCase();
-      if (s.length < 2) s = '0' + s;
-      hexStr += s;
-    });
-    
-    this.cellularMsgs.push({
-      hex: hexStr,
-      time: Date.now()
-    });
-    
-    if (this.cellularMsgs.length > 100) this.cellularMsgs.shift();
-    
-    this.metrics.pending++;
-    this.updateMetricsUI();
-    this.checkPendingTimeout();
-  }
-  
-  registerInternetMsg(payloadStr) {
-    // payloadStr is latin1-decoded from backend: each charCode == original byte value.
-    // Convert to a compact uppercase hex string so we can match against cellular hex.
-    const cleanPayloadHex = stringToHex(payloadStr).replace(/\s+/g, '').toUpperCase();
-    const now = Date.now();
-    
-    for (let i = this.cellularMsgs.length - 1; i >= 0; i--) {
-      const cellMsg = this.cellularMsgs[i];
-      if (cleanPayloadHex.includes(cellMsg.hex)) {
-        const delay = (now - cellMsg.time) / 1000;
-        
-        let legend = 'Success';
-        if (cleanPayloadHex.startsWith(cellMsg.hex)) {
-          legend = 'Corrupted';
-          this.metrics.corrupted++;
-        } else {
-          this.metrics.success++;
-        }
-        
-        if (this.metrics.pending > 0) this.metrics.pending--;
-        
-        const dateObj = new Date(cellMsg.time);
-        const tsStr = `${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}:${String(dateObj.getSeconds()).padStart(2, '0')}`;
-        
-        this.matchedPoints.push({
-          timestamp: tsStr,
-          delay: Math.max(0.001, delay),
-          legend: legend,
-          cellTime: cellMsg.time
-        });
-        
-        if (this.matchedPoints.length > 50) this.matchedPoints.shift();
-        this.cellularMsgs.splice(i, 1);
-        
-        this.recalculateAvgLatency();
-        this.updateMetricsUI();
-        
-        if (panePerf && panePerf.classList.contains('active')) {
-          drawPerformanceChart();
-        }
-        break;
-      }
-    }
-  }
-  
-  checkPendingTimeout() {
-    const now = Date.now();
-    let updated = false;
-    for (let i = this.cellularMsgs.length - 1; i >= 0; i--) {
-      const cellMsg = this.cellularMsgs[i];
-      if (now - cellMsg.time > 5000) {
-        this.cellularMsgs.splice(i, 1);
-        if (this.metrics.pending > 0) this.metrics.pending--;
-        
-        const dateObj = new Date(cellMsg.time);
-        const tsStr = `${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}:${String(dateObj.getSeconds()).padStart(2, '0')}`;
-        
-        this.matchedPoints.push({
-          timestamp: tsStr,
-          delay: 5.0,
-          legend: 'Fail',
-          cellTime: cellMsg.time
-        });
-        
-        if (this.matchedPoints.length > 50) this.matchedPoints.shift();
-        updated = true;
-      }
-    }
-    if (updated) {
-      this.updateMetricsUI();
-      if (panePerf && panePerf.classList.contains('active')) {
-        drawPerformanceChart();
-      }
-    }
-  }
-  
-  recalculateAvgLatency() {
-    const successes = this.matchedPoints.filter(p => p.legend === 'Success' || p.legend === 'Corrupted');
-    if (successes.length === 0) {
-      this.metrics.avgLatency = 0;
-      return;
-    }
-    const sum = successes.reduce((acc, p) => acc + p.delay, 0);
-    this.metrics.avgLatency = (sum / successes.length) * 1000;
-  }
-  
-  updateMetricsUI() {
-    const successVal = document.getElementById('perf-val-success');
-    const corruptedVal = document.getElementById('perf-val-corrupted');
-    const pendingVal = document.getElementById('perf-val-pending');
-    const latencyVal = document.getElementById('perf-val-latency');
-    
-    if (successVal) successVal.innerHTML = `${this.metrics.success}<span class="perf-unit">pkts</span>`;
-    if (corruptedVal) corruptedVal.innerHTML = `${this.metrics.corrupted}<span class="perf-unit">pkts</span>`;
-    if (pendingVal) pendingVal.innerHTML = `${this.metrics.pending}<span class="perf-unit">pkts</span>`;
-    if (latencyVal) latencyVal.innerHTML = `${this.metrics.avgLatency.toFixed(1)}<span class="perf-unit">ms</span>`;
-  }
+  registerCellularMsg(pktBytes) {}
+  registerInternetMsg(payloadStr, isPass) {}
+  registerCellularError(errorMsg) {}
+  checkPendingTimeout() {}
+  recalculateAvgLatency() {}
+  updateMetricsUI() {}
 }
 
 const performanceTracker = new PerformanceTracker();
-setInterval(() => {
-  performanceTracker.checkPendingTimeout();
-}, 1000);
+
+let hoveredPointIndex = -1;
+
+function getHistoryWithEpochTimes(historyArray) {
+  let baseDate = new Date();
+  baseDate.setHours(0,0,0,0);
+  let lastTimeMs = 0;
+  let dayOffset = 0;
+  
+  return historyArray.map((item, idx) => {
+    if (item.time) {
+      return { time: item.time, item };
+    }
+    if (!item.timestamp) return { time: null, item };
+    const match = item.timestamp.match(/\[(\d{2}):(\d{2}):(\d{2})\.(\d{3})\]/);
+    if (!match) return { time: null, item };
+    const hrs = parseInt(match[1], 10);
+    const mins = parseInt(match[2], 10);
+    const secs = parseInt(match[3], 10);
+    const ms = parseInt(match[4], 10);
+    
+    let timeMs = ((hrs * 60 + mins) * 60 + secs) * 1000 + ms;
+    
+    if (idx > 0 && timeMs < lastTimeMs - 3600000) {
+      dayOffset += 24 * 60 * 60 * 1000;
+    }
+    lastTimeMs = timeMs;
+    
+    return {
+      time: baseDate.getTime() + timeMs + dayOffset,
+      item
+    };
+  });
+}
+
+function reconstructHistoryCycles() {
+  const inetRecvs = getHistoryWithEpochTimes(inetConsoleHistory)
+    .filter(x => x.item.type === 'recv' && x.item.rawPayload !== undefined && x.time !== null)
+    .sort((a, b) => a.time - b.time);
+    
+  const cellRecvs = getHistoryWithEpochTimes(cellConsoleHistory)
+    .filter(x => x.item.type === 'recv' && x.item.data !== undefined && x.time !== null)
+    .sort((a, b) => a.time - b.time);
+
+  const delayEl = document.getElementById('crc-check-delay');
+  const delaySec = delayEl ? parseFloat(delayEl.value) : 10;
+  const delayMs  = (isNaN(delaySec) || delaySec <= 0) ? 10000 : delaySec * 1000;
+  
+  function groupPackets(packets) {
+    const groups = [];
+    if (packets.length === 0) return groups;
+    
+    let currentGroup = [packets[0]];
+    for (let i = 1; i < packets.length; i++) {
+      const prev = packets[i - 1];
+      const curr = packets[i];
+      if (curr.time - prev.time > delayMs) {
+        groups.push(currentGroup);
+        currentGroup = [curr];
+      } else {
+        currentGroup.push(curr);
+      }
+    }
+    groups.push(currentGroup);
+    return groups;
+  }
+  
+  const inetGroups = groupPackets(inetRecvs);
+  const cellGroups = groupPackets(cellRecvs);
+
+  const processedInetCycles = inetGroups.map(group => {
+    const startTime = group[0].time;
+    const endTime = group[group.length - 1].time;
+    const duration = endTime - startTime;
+    
+    const buf = [];
+    for (const p of group) {
+      const rawPayload = p.item.rawPayload;
+      for (let i = 0; i < rawPayload.length; i++) {
+        buf.push(rawPayload.charCodeAt(i) & 0xFF);
+      }
+    }
+    
+    const savedInetIdx = lastMatchedRuleIndices.inet;
+    const res = analyzeBufferedModbus(buf, null, false, 'inet');
+    lastMatchedRuleIndices.inet = savedInetIdx;
+    
+    return {
+      startTime,
+      endTime,
+      duration,
+      isPass: res ? res.isPass : false,
+      timestamp: group[0].item.timestamp
+    };
+  });
+
+  const processedCellCycles = cellGroups.map(group => {
+    const startTime = group[0].time;
+    const endTime = group[group.length - 1].time;
+    const duration = endTime - startTime;
+    
+    let hasCheckError = false;
+    for (const p of group) {
+      const data = p.item.data;
+      if (typeof data === 'string' && (data.includes('Please check GPRS !!!') || data.includes('Please check CSQ !!!'))) {
+        hasCheckError = true;
+      }
+    }
+    
+    const buf = [];
+    for (const p of group) {
+      const data = p.item.data;
+      if (typeof data === 'string' && (data.includes('Please check GPRS !!!') || data.includes('Please check CSQ !!!'))) {
+        continue;
+      }
+      for (let i = 0; i < data.length; i++) {
+        buf.push(data.charCodeAt(i) & 0xFF);
+      }
+    }
+    
+    let isPass = false;
+    if (buf.length > 0) {
+      const savedCellIdx = lastMatchedRuleIndices.cell;
+      const res = analyzeBufferedModbus(buf, null, false, 'cell');
+      lastMatchedRuleIndices.cell = savedCellIdx;
+      isPass = res ? res.isPass : false;
+    }
+    
+    return {
+      startTime,
+      endTime,
+      duration,
+      isPass,
+      hasCheckError,
+      timestamp: group[0].item.timestamp
+    };
+  });
+
+  const matchedPoints = [];
+  const matchedCellIds = new Set();
+  
+  processedInetCycles.forEach(inetCycle => {
+    let bestCellCycle = null;
+    let minDiff = 15000;
+    
+    processedCellCycles.forEach(cellCycle => {
+      const diff = Math.abs(inetCycle.startTime - cellCycle.startTime);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestCellCycle = cellCycle;
+      }
+    });
+    
+    if (bestCellCycle) {
+      matchedCellIds.add(bestCellCycle.startTime);
+      matchedPoints.push({
+        timestamp: inetCycle.timestamp,
+        time: inetCycle.startTime,
+        inetDuration: inetCycle.duration,
+        cellDuration: bestCellCycle.duration,
+        inetPass: inetCycle.isPass,
+        cellPass: bestCellCycle.hasCheckError ? false : bestCellCycle.isPass,
+        cellCheckError: bestCellCycle.hasCheckError,
+        isPass: inetCycle.isPass && bestCellCycle.isPass && !bestCellCycle.hasCheckError
+      });
+    } else {
+      matchedPoints.push({
+        timestamp: inetCycle.timestamp,
+        time: inetCycle.startTime,
+        inetDuration: inetCycle.duration,
+        cellDuration: null,
+        inetPass: inetCycle.isPass,
+        cellPass: false,
+        cellCheckError: false,
+        isPass: inetCycle.isPass
+      });
+    }
+  });
+  
+  processedCellCycles.forEach(cellCycle => {
+    if (!matchedCellIds.has(cellCycle.startTime)) {
+      matchedPoints.push({
+        timestamp: cellCycle.timestamp,
+        time: cellCycle.startTime,
+        inetDuration: null,
+        cellDuration: cellCycle.duration,
+        inetPass: false,
+        cellPass: cellCycle.hasCheckError ? false : cellCycle.isPass,
+        cellCheckError: cellCycle.hasCheckError,
+        isPass: cellCycle.isPass && !cellCycle.hasCheckError
+      });
+    }
+  });
+  
+  matchedPoints.sort((a, b) => a.time - b.time);
+  return matchedPoints;
+}
+
+function savePerformanceTrackerToLocalStorage() {
+  localStorage.setItem('perf_matched_points', JSON.stringify(performanceTracker.matchedPoints));
+}
+
+function initializePerformanceTrackerFromHistory() {
+  const savedPoints = localStorage.getItem('perf_matched_points');
+  if (savedPoints) {
+    try {
+      performanceTracker.matchedPoints = JSON.parse(savedPoints);
+    } catch (e) {
+      performanceTracker.matchedPoints = [];
+    }
+  } else {
+    performanceTracker.matchedPoints = [];
+  }
+}
 
 // Canvas plotting function
 function drawPerformanceChart() {
+  if (!panePerf || !panePerf.classList.contains('active')) return;
+  if (!viewMqtt || !viewMqtt.classList.contains('active')) return;
+
   const canvas = document.getElementById('perf-latency-canvas');
   if (!canvas) return;
   
+  const wrapper = document.getElementById('perf-canvas-wrapper');
+  if (!wrapper || wrapper.clientWidth === 0) return;
+
   const ctx = canvas.getContext('2d');
+  
+  // Reconstruct performance points dynamically directly from log histories
+  performanceTracker.matchedPoints = reconstructHistoryCycles();
+  
+  // Get zoom value
+  const zoomSlider = document.getElementById('perf-zoom-slider');
+  const zoom = zoomSlider ? parseFloat(zoomSlider.value) : 1.0;
+  
+  // Set canvas visual width dynamically relative to the scrollable wrapper's width
+  const containerWidth = wrapper.clientWidth;
+  canvas.style.width = Math.max(containerWidth, containerWidth * zoom) + 'px';
+  
   const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+
   canvas.width = rect.width * window.devicePixelRatio;
   canvas.height = rect.height * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
@@ -4848,30 +5590,68 @@ function drawPerformanceChart() {
   
   ctx.clearRect(0, 0, width, height);
   
-  ctx.strokeStyle = '#222730';
-  ctx.lineWidth = 1;
-  
-  const paddingLeft = 60;
-  const paddingRight = 20;
-  const paddingTop = 40;
-  const paddingBottom = 40;
+  const paddingLeft = 75; // Increased to prevent larger Y-axis tick labels from clipping
+  const paddingRight = 40;
+  const paddingTop = 30; // Reduced padding now that legend is deleted
+  const paddingBottom = 55; // Increased to prevent larger X-axis timestamp labels from clipping
   
   const chartWidth = width - paddingLeft - paddingRight;
   const chartHeight = height - paddingTop - paddingBottom;
   
-  const ticks = [1, 10, 50, 200, 500, 1000];
-  ctx.font = '10px Consolas, monospace';
-  ctx.fillStyle = '#657388';
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
+  const pts = performanceTracker.matchedPoints;
+  if (pts.length === 0) {
+    ctx.fillStyle = '#657388';
+    ctx.font = '14px var(--font-sans), sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No matched packets to analyze performance latency.', width / 2, height / 2);
+    return;
+  }
+  
+  // Determine timeline X-axis limits aligned to minutes
+  const times = pts.map(pt => pt.time).filter(t => t !== undefined && t !== null);
+  let T_start, T_end;
+  if (times.length === 0) {
+    T_start = Date.now() - 300000;
+    T_end = Date.now();
+  } else if (times.length === 1) {
+    const t = times[0];
+    T_start = Math.floor((t - 120000) / 60000) * 60000;
+    T_end = Math.ceil((t + 120000) / 60000) * 60000;
+  } else {
+    const tMin = Math.min(...times);
+    const tMax = Math.max(...times);
+    T_start = Math.floor(tMin / 60000) * 60000;
+    T_end = Math.ceil(tMax / 60000) * 60000;
+    if (T_end - T_start < 120000) {
+      T_end = T_start + 120000;
+    }
+  }
+  
+  const scaleX = chartWidth / (T_end - T_start);
+
+  // Auto-scale Y-axis limits based on maximum actual value in dataset (excluding GPRS/CSQ errors to prevent vertical stretch)
+  const maxVal = Math.max(...pts.map(pt => Math.max(pt.inetDuration || 0, pt.cellCheckError ? 0 : (pt.cellDuration || 0))), 100);
+  const yMax = Math.ceil(maxVal * 1.15); // Add 15% top margin
+  
+  // Generate 5 tick intervals
+  const ticks = [];
+  for (let i = 0; i <= 4; i++) {
+    ticks.push(Math.round((yMax / 4) * i));
+  }
   
   function getValY(msVal) {
-    const minLog = Math.log10(1);
-    const maxLog = Math.log10(1500);
-    const logVal = Math.log10(Math.max(1, msVal));
-    const percent = (logVal - minLog) / (maxLog - minLog);
+    const percent = msVal / yMax;
     return paddingTop + chartHeight * (1 - percent);
   }
+  
+  // Draw horizontal grid lines and Y-axis tick values
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.lineWidth = 1;
+  ctx.font = '14px var(--font-sans), sans-serif';
+  ctx.fillStyle = '#8892b0';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
   
   ticks.forEach(t => {
     const y = getValY(t);
@@ -4880,62 +5660,189 @@ function drawPerformanceChart() {
     ctx.lineTo(width - paddingRight, y);
     ctx.stroke();
     
-    ctx.fillText(`${t}ms`, paddingLeft - 8, y);
+    // 超过1000ms应该以1s作为刻度。
+    let tickLabel = `${t}ms`;
+    if (yMax >= 1000) {
+      tickLabel = `${(t / 1000).toFixed(1).replace('.0', '')}s`;
+    }
+    ctx.fillText(tickLabel, paddingLeft - 10, y);
   });
   
-  ctx.strokeStyle = '#38444d';
+  // Draw X-axis baseline
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
   ctx.beginPath();
   ctx.moveTo(paddingLeft, height - paddingBottom);
   ctx.lineTo(width - paddingRight, height - paddingBottom);
   ctx.stroke();
   
-  const pts = performanceTracker.matchedPoints;
-  if (pts.length === 0) {
-    ctx.fillStyle = '#657388';
-    ctx.font = '14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('No matched packets to analyze performance latency.', width / 2, height / 2);
-    return;
+  // Draw vertical grid lines and X-axis ticks at minute boundaries
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.lineWidth = 1;
+  ctx.font = '12px var(--font-mono), Consolas, monospace';
+  ctx.fillStyle = '#8892b0';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  
+  const bottomY = height - paddingBottom;
+  const totalMinutes = Math.round((T_end - T_start) / 60000);
+  
+  // Choose dynamically how many ticks to display based on width to prevent label overlap
+  let stepMinutes = 1;
+  const minSpacing = 80; // minimum pixel spacing between labels
+  const maxTicks = Math.floor(chartWidth / minSpacing);
+  if (totalMinutes > maxTicks) {
+    const possibleSteps = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
+    for (const step of possibleSteps) {
+      if (totalMinutes / step <= maxTicks) {
+        stepMinutes = step;
+        break;
+      }
+    }
   }
   
-  const barSpacing = chartWidth / 50;
-  const barWidth = Math.max(2, barSpacing * 0.7);
+  for (let m = 0; m <= totalMinutes; m += stepMinutes) {
+    const t = T_start + m * 60000;
+    const x = paddingLeft + (t - T_start) * scaleX;
+    
+    ctx.beginPath();
+    ctx.moveTo(x, paddingTop);
+    ctx.lineTo(x, bottomY);
+    ctx.stroke();
+    
+    const date = new Date(t);
+    const label = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    ctx.fillText(label, x, bottomY + 8);
+  }
   
-  pts.forEach((pt, i) => {
-    const x = paddingLeft + i * barSpacing + (barSpacing - barWidth) / 2;
-    const ms = pt.delay * 1000;
-    const y = getValY(ms);
-    const bottomY = height - paddingBottom;
+  // Rounded bar drawer
+  function drawRoundedBar(ctx, x, y, width, height, radius) {
+    if (height < radius) radius = height; // prevent radius from being larger than height
+    ctx.beginPath();
+    ctx.moveTo(x, y + height); // Bottom-left
+    ctx.lineTo(x, y + radius); // Left side
+    ctx.quadraticCurveTo(x, y, x + radius, y); // Top-left corner
+    ctx.lineTo(x + width - radius, y); // Top side
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius); // Top-right corner
+    ctx.lineTo(x + width, y + height); // Right side
+    ctx.closePath();
+    ctx.fill();
+  }
+  
+  // Draw the bars
+  pts.forEach((pt) => {
+    if (pt.time === undefined || pt.time === null) return;
+    const xCenter = paddingLeft + (pt.time - T_start) * scaleX;
+    const singleBarWidth = 8;
+
+    const xInet = xCenter - singleBarWidth / 2 - 1;
+    const xCell = xCenter + singleBarWidth / 2 + 1;
     
-    if (pt.legend === 'Success') ctx.fillStyle = '#2ecc71';
-    else if (pt.legend === 'Corrupted') ctx.fillStyle = '#f39c12';
-    else ctx.fillStyle = '#e74c3c';
-    
-    ctx.fillRect(x, y, barWidth, bottomY - y);
-    
-    if (i % 5 === 0) {
-      ctx.fillStyle = '#657388';
-      ctx.textAlign = 'center';
-      ctx.fillText(i + 1, x + barWidth / 2, bottomY + 12);
+    // Draw Internet MQTT Bar
+    if (pt.inetDuration !== null && pt.inetDuration !== undefined) {
+      const ms = pt.inetDuration;
+      const y = getValY(ms);
+      const barHeight = Math.max(2, bottomY - y);
+      const barTop = bottomY - barHeight;
+      const color = pt.inetPass ? '#3b82f6' : '#ea4335'; // Blue for pass, Red for fail
+      ctx.fillStyle = color;
+      drawRoundedBar(ctx, xInet - singleBarWidth / 2, barTop, singleBarWidth, barHeight, Math.min(4, singleBarWidth / 2));
+    } else {
+      const barHeight = 4;
+      const barTop = bottomY - barHeight;
+      ctx.fillStyle = '#4a5568';
+      drawRoundedBar(ctx, xInet - singleBarWidth / 2, barTop, singleBarWidth, barHeight, 1);
+    }
+
+    // Draw Cellular MQTT Bar
+    if (pt.cellCheckError) {
+      const ms = maxVal / 3;
+      const y = getValY(ms);
+      const barHeight = Math.max(2, bottomY - y);
+      const barTop = bottomY - barHeight;
+      ctx.fillStyle = '#ea4335'; // Red for check error
+      drawRoundedBar(ctx, xCell - singleBarWidth / 2, barTop, singleBarWidth, barHeight, Math.min(4, singleBarWidth / 2));
+    } else if (pt.cellDuration !== null && pt.cellDuration !== undefined) {
+      const ms = pt.cellDuration;
+      const y = getValY(ms);
+      const barHeight = Math.max(2, bottomY - y);
+      const barTop = bottomY - barHeight;
+      const color = pt.cellPass ? '#9b51e0' : '#ea4335'; // Purple for pass, Red for fail
+      ctx.fillStyle = color;
+      drawRoundedBar(ctx, xCell - singleBarWidth / 2, barTop, singleBarWidth, barHeight, Math.min(4, singleBarWidth / 2));
+    } else {
+      const barHeight = 4;
+      const barTop = bottomY - barHeight;
+      ctx.fillStyle = '#4a5568';
+      drawRoundedBar(ctx, xCell - singleBarWidth / 2, barTop, singleBarWidth, barHeight, 1);
     }
   });
   
-  ctx.textAlign = 'left';
-  const legendItems = [
-    { label: 'Success', color: '#2ecc71' },
-    { label: 'Corrupted Header', color: '#f39c12' },
-    { label: 'Fail / Pending Timeout', color: '#e74c3c' }
-  ];
-  
-  let currentX = paddingLeft;
-  legendItems.forEach(item => {
-    ctx.fillStyle = item.color;
-    ctx.fillRect(currentX, 15, 12, 8);
+  // Draw Tooltip if hovering a point
+  if (hoveredPointIndex !== -1 && hoveredPointIndex < pts.length) {
+    const pt = pts[hoveredPointIndex];
+    const xCenter = paddingLeft + (pt.time - T_start) * scaleX;
     
-    ctx.fillStyle = '#657388';
-    ctx.fillText(item.label, currentX + 16, 20);
-    currentX += 130;
-  });
+    // Use the taller bar height for positioning the tooltip above
+    const maxPtVal = Math.max(pt.inetDuration || 0, pt.cellCheckError ? (maxVal / 3) : (pt.cellDuration || 0));
+    const y = getValY(maxPtVal);
+    const barHeight = Math.max(2, bottomY - y);
+    const barTop = bottomY - barHeight;
+    
+    // Draw vertical column highlight bounds
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(xCenter - 8, paddingTop, 16, bottomY - paddingTop);
+    
+    let inetText = (pt.inetDuration !== null && pt.inetDuration !== undefined) ? `${Math.round(pt.inetDuration)}ms` : 'N/A (Logs Deleted)';
+    let cellText = '';
+    if (pt.cellCheckError) {
+      cellText = 'Check GPRS/CSQ Error';
+    } else if (pt.cellDuration !== null && pt.cellDuration !== undefined) {
+      cellText = `${Math.round(pt.cellDuration)}ms`;
+    } else {
+      cellText = 'N/A (Logs Deleted/Missing)';
+    }
+    
+    const lines = [
+      `Time: ${pt.timestamp}`,
+      `Status: ${pt.isPass ? 'PASS' : 'FAIL'}`,
+      `🌐 Internet: ${inetText}`,
+      `📶 Cellular: ${cellText}`
+    ];
+    
+    ctx.font = '12px var(--font-sans), sans-serif';
+    let maxTextWidth = 0;
+    lines.forEach(line => {
+      const w = ctx.measureText(line).width;
+      if (w > maxTextWidth) maxTextWidth = w;
+    });
+    
+    const tooltipWidth = maxTextWidth + 16;
+    const tooltipHeight = lines.length * 18 + 12;
+    
+    let tx = xCenter - tooltipWidth / 2;
+    let ty = barTop - tooltipHeight - 10;
+    
+    if (tx < 5) tx = 5;
+    if (tx + tooltipWidth > width - 5) tx = width - tooltipWidth - 5;
+    if (ty < 5) ty = barTop + barHeight + 10; // place below the bar if no space above
+    
+    ctx.fillStyle = 'rgba(30, 31, 32, 0.95)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1;
+    
+    ctx.beginPath();
+    ctx.roundRect(tx, ty, tooltipWidth, tooltipHeight, 6);
+    ctx.fill();
+    ctx.stroke();
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    lines.forEach((line, idx) => {
+      ctx.fillText(line, tx + 8, ty + 6 + idx * 18);
+    });
+  }
 }
 
 function calculateCrc16(buffer) {
@@ -4990,13 +5897,126 @@ loadCellSettings();
 loadCellModbusSettings();
 loadInetConsoleHistory();
 loadCellConsoleHistory();
+initializePerformanceTrackerFromHistory();
 updateGeneratedModbusHex();
 updateSidebarCsqCardVisibility();
+initializeMqttPayloadBadgeFromStorage();
 
+const perfZoomSlider = document.getElementById('perf-zoom-slider');
+if (perfZoomSlider) {
+  perfZoomSlider.addEventListener('input', () => {
+    drawPerformanceChart();
+  });
+}
+
+const perfCanvas = document.getElementById('perf-latency-canvas');
+if (perfCanvas) {
+  perfCanvas.addEventListener('mousemove', (e) => {
+    const rect = perfCanvas.getBoundingClientRect();
+    const xVisual = e.clientX - rect.left;
+    const yVisual = e.clientY - rect.top;
+    const pts = performanceTracker.matchedPoints;
+    if (pts.length === 0) return;
+    
+    const paddingLeft = 75;
+    const paddingRight = 40;
+    const paddingTop = 30;
+    const paddingBottom = 55;
+    const chartWidth = rect.width - paddingLeft - paddingRight;
+    const bottomY = rect.height - paddingBottom;
+    
+    // Determine timeline X-axis limits aligned to minutes
+    const times = pts.map(pt => pt.time).filter(t => t !== undefined && t !== null);
+    let T_start, T_end;
+    if (times.length === 0) {
+      T_start = Date.now() - 300000;
+      T_end = Date.now();
+    } else if (times.length === 1) {
+      const t = times[0];
+      T_start = Math.floor((t - 120000) / 60000) * 60000;
+      T_end = Math.ceil((t + 120000) / 60000) * 60000;
+    } else {
+      const tMin = Math.min(...times);
+      const tMax = Math.max(...times);
+      T_start = Math.floor(tMin / 60000) * 60000;
+      T_end = Math.ceil(tMax / 60000) * 60000;
+      if (T_end - T_start < 120000) {
+        T_end = T_start + 120000;
+      }
+    }
+    
+    const scaleX = chartWidth / (T_end - T_start);
+    let newHoveredIndex = -1;
+    let minDistance = 15; // Hit detection radius in pixels
+    
+    for (let i = 0; i < pts.length; i++) {
+      const pt = pts[i];
+      if (pt.time === undefined || pt.time === null) continue;
+      const xCenter = paddingLeft + (pt.time - T_start) * scaleX;
+      
+      const distance = Math.abs(xVisual - xCenter);
+      const hitY = yVisual >= paddingTop && yVisual <= bottomY;
+      
+      if (hitY && distance < minDistance) {
+        newHoveredIndex = i;
+        minDistance = distance;
+      }
+    }
+    
+    if (newHoveredIndex !== hoveredPointIndex) {
+      hoveredPointIndex = newHoveredIndex;
+      drawPerformanceChart();
+    }
+  });
+  
+  perfCanvas.addEventListener('mouseleave', () => {
+    if (hoveredPointIndex !== -1) {
+      hoveredPointIndex = -1;
+      drawPerformanceChart();
+    }
+  });
+}
+
+const perfCanvasWrapper = document.getElementById('perf-canvas-wrapper');
+if (perfCanvasWrapper) {
+  perfCanvasWrapper.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomSlider = document.getElementById('perf-zoom-slider');
+    if (!zoomSlider) return;
+    let currentZoom = parseFloat(zoomSlider.value);
+    const zoomIntensity = 0.1;
+    if (e.deltaY < 0) {
+      currentZoom = Math.min(10, currentZoom + zoomIntensity);
+    } else {
+      currentZoom = Math.max(1, currentZoom - zoomIntensity);
+    }
+    zoomSlider.value = currentZoom.toFixed(1);
+    drawPerformanceChart();
+  }, { passive: false });
+
+  const resizeObserver = new ResizeObserver(entries => {
+    for (let entry of entries) {
+      if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+        if (panePerf && panePerf.classList.contains('active')) {
+          drawPerformanceChart();
+        }
+      }
+    }
+  });
+  resizeObserver.observe(perfCanvasWrapper);
+}
 
 window.addEventListener('resize', () => {
   if (panePerf && panePerf.classList.contains('active')) {
     drawPerformanceChart();
+  }
+});
+
+// Enable Ctrl+R and F5 reload shortcuts within the renderer since native menus are removed
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey && (e.key === 'r' || e.key === 'R')) || e.key === 'F5') {
+    e.preventDefault();
+    window.location.reload();
   }
 });
 

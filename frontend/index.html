@@ -297,6 +297,7 @@
           <div id="mqtt-payload-status-container" class="mqtt-payload-badge-container" style="display: none;">
             <span id="mqtt-payload-badge" class="mqtt-payload-badge">payload pass</span>
             <span id="mqtt-payload-time" class="mqtt-payload-badge-time">--:--:--</span>
+            <span id="mqtt-payload-elapsed" class="mqtt-payload-badge-time" style="margin-left: 4px; font-weight: 500;"></span>
           </div>
         </div>
 
@@ -412,7 +413,7 @@
                   </div>
                   <div class="checkbox-row" style="margin-right: 12px;">
                     <label class="switch-mini">
-                      <input type="checkbox" id="chk-inet-modbus-crc">
+                      <input type="checkbox" id="chk-inet-modbus-crc" checked>
                       <span class="slider-mini"></span>
                     </label>
                     <span class="switch-lbl">CRC Check</span>
@@ -573,6 +574,14 @@
                       <option value="Space">Space</option>
                     </select>
                   </div>
+                </div>
+                
+                <div class="checkbox-row" style="margin-top: 6px; margin-bottom: 2px;">
+                  <label class="switch-mini">
+                    <input type="checkbox" id="chk-cell-connect-reload" checked>
+                    <span class="slider-mini"></span>
+                  </label>
+                  <span class="switch-lbl">Reload DTU on Connect</span>
                 </div>
                 
                 <div class="settings-row-flex" style="margin-top: 6px; gap: 8px;">
@@ -979,7 +988,7 @@
                   </div>
                   <div class="checkbox-row" style="margin-right: 12px;">
                     <label class="switch-mini">
-                      <input type="checkbox" id="chk-cell-modbus-crc">
+                      <input type="checkbox" id="chk-cell-modbus-crc" checked>
                       <span class="slider-mini"></span>
                     </label>
                     <span class="switch-lbl">CRC Check</span>
@@ -1024,31 +1033,18 @@
         <!-- Tab 3: Performance Pane -->
         <div class="mqtt-tab-pane" id="pane-perf">
           <div class="perf-workspace" style="display: flex; flex-direction: column; gap: 15px; height: 100%; overflow-y: auto; padding: 4px;">
-            <!-- Metrics Cards Grid -->
-            <div class="perf-metrics-grid">
-              <div class="perf-card glass">
-                <div class="perf-lbl">✅ Sync Success</div>
-                <div class="perf-val" id="perf-val-success">0<span class="perf-unit">pkts</span></div>
-              </div>
-              <div class="perf-card glass">
-                <div class="perf-lbl" style="color:hsl(350, 80%, 55%);">⚠️ Corrupted</div>
-                <div class="perf-val" style="color:hsl(350, 80%, 55%);" id="perf-val-corrupted">0<span class="perf-unit">pkts</span></div>
-              </div>
-              <div class="perf-card glass">
-                <div class="perf-lbl" style="color:hsl(35, 90%, 55%);">⏳ Pending</div>
-                <div class="perf-val" style="color:hsl(35, 90%, 55%);" id="perf-val-pending">0<span class="perf-unit">pkts</span></div>
-              </div>
-              <div class="perf-card glass">
-                <div class="perf-lbl">⏱ Avg Latency</div>
-                <div class="perf-val" id="perf-val-latency">0.0<span class="perf-unit">ms</span></div>
-              </div>
-            </div>
 
             <!-- Canvas Latency Plot Card -->
-            <div class="perf-chart-card glass" style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 12px; flex-grow: 1; min-height: 420px;">
-              <div class="panel-section-title" style="color: var(--accent); font-size: 14px;">Performance Graph: <b>Sync Delay Trends</b></div>
-              <div style="flex-grow: 1; position: relative;">
-                <canvas id="perf-latency-canvas" style="width: 100%; height: 100%; min-height: 350px; background-color: #0c0c0d; border: 1px solid var(--border); border-radius: 8px;"></canvas>
+            <div class="perf-chart-card glass" style="display: flex; flex-direction: column; gap: 12px; padding: 24px; border-radius: 12px; flex-grow: 1; min-height: 420px; min-width: 0; background: rgba(22, 27, 34, 0.45); border: 1px solid var(--border);">
+              <div class="perf-chart-header" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <div class="panel-section-title" style="color: var(--accent); font-size: 14px; margin: 0;">Performance Graph: <b>Sync Delay Trends</b></div>
+                <div class="perf-zoom-container" style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 12px; color: var(--text-muted); font-family: var(--font-sans);">Zoom:</span>
+                  <input type="range" id="perf-zoom-slider" min="1" max="10" step="0.1" value="1" style="width: 120px; cursor: pointer; accent-color: var(--accent);">
+                </div>
+              </div>
+              <div id="perf-canvas-wrapper" style="flex-grow: 1; overflow-x: auto; width: 100%; position: relative; border: 1px solid var(--border); border-radius: 8px; background-color: #0c0c0d;">
+                <canvas id="perf-latency-canvas" style="display: block; height: 100%; min-height: 350px; background-color: #0c0c0d; border-radius: 8px;"></canvas>
               </div>
             </div>
           </div>
